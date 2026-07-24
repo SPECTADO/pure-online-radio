@@ -346,6 +346,20 @@ HTTPS-only in production, where TLS is terminated in front of nginx per the Depl
 `curl -sD - -o /dev/null -X POST .../api/auth/login ... | grep -i set-cookie` — in dev it should show `HttpOnly;
 SameSite=Strict` with **no** `Secure`.
 
+**`/manage` (no trailing slash) silently shows the player app instead of the control panel**, or a
+**`WebSocket connection to 'ws://.../realtime' failed: bad response from the server`**. Same underlying cause both
+times: nginx's `location /manage/` and `location /realtime/` are prefix matches that require the trailing slash to
+already be part of the request URI — a bare `/manage` or `/realtime` doesn't match either and falls through to the
+player SPA's `location /` instead, which returns a normal 200 HTML response (not a 101 WebSocket upgrade). The two
+cases needed *different* fixes: `/manage` got an explicit `location = /manage { return 301 $scheme://$http_host/manage/; }`
+redirect (note `$http_host`, not `$host` — `$host` drops the port, and nginx would otherwise build the redirect
+against its own internal listening port rather than the externally-mapped `WEBSERVER_HOST_PORT`). `/realtime`
+could **not** use a redirect — WebSocket clients don't follow HTTP redirects during the handshake — so that one had
+to be fixed at the source instead: `apps/api/src/modules/realtime/realtime.routes.ts` now hands out
+`ws://.../realtime/` (trailing slash included) rather than relying on nginx to correct it after the fact. If you add
+another trailing-slash-sensitive location, decide up front whether anything connecting to it is a WebSocket — if so,
+skip the redirect trick entirely and fix the URL at its source instead.
+
 **Edited `apps/api` or `apps/encoder` source but the running dev container doesn't reflect it.** `tsx watch` relies
 on filesystem-change events, and Docker Desktop's bind-mount file sharing doesn't always propagate host-side edits
 into the container reliably. If `docker compose exec <service> cat <file>` shows your edit but the behavior hasn't

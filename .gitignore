@@ -11,3 +11,4 @@ apps/control-panel/vite.config.ts.timestamp-*
 apps/player/vite.config.ts.timestamp-*
 packages/database/generated/
 coverage/
+_prompt.txt
