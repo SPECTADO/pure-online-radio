@@ -1,0 +1,48 @@
+# This is a TEMPLATE, not the config nats-server actually reads. docker-entrypoint.sh
+# resolves ${VAR} placeholders via `envsubst` into a real, fully-quoted
+# nats-server.conf before nats-server ever starts — nats-server's own $VAR
+# substitution is NOT used here. Two reasons: (1) empirically, nats-server does
+# NOT expand a quoted "$VAR" reference at all (uses the literal string), and (2)
+# an unquoted $VAR reference gets substituted as raw config text, which breaks
+# the moment a real generated secret happens to start with a digit (its own
+# parser then tries to read it as a number and chokes on the trailing letters).
+# Pre-resolving with envsubst sidesteps both: nats-server only ever sees a
+# complete, already-quoted string literal, regardless of what characters the
+# password contains.
+listen: 0.0.0.0:4222
+http: 0.0.0.0:8222
+
+websocket {
+  listen: 0.0.0.0:9222
+  no_tls: true
+  same_origin: false
+}
+
+authorization {
+  users = [
+    {
+      user: "api"
+      password: "${API_NATS_PASSWORD}"
+      permissions: {
+        publish: ["radio.encoder.cmd.>", "radio.control.>"]
+        subscribe: ["radio.encoder.status.>"]
+      }
+    },
+    {
+      user: "encoder"
+      password: "${ENCODER_NATS_PASSWORD}"
+      permissions: {
+        publish: ["radio.encoder.status.>"]
+        subscribe: ["radio.encoder.cmd.>"]
+      }
+    },
+    {
+      user: "control-panel"
+      password: "${CONTROL_PANEL_NATS_PASSWORD}"
+      permissions: {
+        subscribe: ["radio.encoder.status.>", "radio.control.>"]
+        publish: { deny: ">" }
+      }
+    }
+  ]
+}

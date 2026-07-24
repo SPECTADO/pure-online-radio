@@ -1,0 +1,302 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ────────────────────────────────────────────────────────────────
+
+enum Role {
+  MANAGER
+  ADMIN
+}
+
+enum MediaKind {
+  SONG
+  JINGLE
+}
+
+enum SelectionStrategy {
+  RANDOM
+  LEAST_OFTEN_PLAYED
+}
+
+enum JingleType {
+  STATION_ID
+  SWEEPER
+  SFX
+  PROMO
+  ADVERT
+  OTHER
+}
+
+enum ScheduledItemStatus {
+  PENDING
+  PLAYED
+  SKIPPED
+  CANCELLED
+}
+
+enum ExternalStreamStatus {
+  SCHEDULED
+  PLAYING
+  STOPPED
+  FAILED
+  CANCELLED
+}
+
+enum SeparationRuleScope {
+  GLOBAL
+  CLOCK_WHEEL // future: scoped to a specific ClockWheel
+}
+
+enum PlaybackSource {
+  CLOCK_WHEEL
+  SCHEDULED_ITEM
+  MANUAL
+  EXTERNAL_STREAM
+  LIVE_MIC
+}
+
+enum PlaybackMediaKind {
+  SONG
+  JINGLE
+  EXTERNAL_STREAM
+  LIVE_MIC
+}
+
+// ── Users / auth ─────────────────────────────────────────────────────────
+
+model User {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  passwordHash String
+  role         Role      @default(MANAGER)
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  createdSongs           Song[]                @relation("SongCreatedBy")
+  createdJingles         Jingle[]               @relation("JingleCreatedBy")
+  createdScheduledItems  ScheduledItem[]
+  createdExternalStreams ExternalStream[]
+  updatedSeparationRules SeparationRule[]
+  commandAuditLogs       CommandAuditLog[]
+}
+
+// ── Library: songs & jingles ─────────────────────────────────────────────
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String   @unique // "TOP", "HITS", "all", ...
+  createdAt DateTime @default(now())
+
+  songs           Song[]
+  clockWheelSteps ClockWheelStep[]
+}
+
+model Song {
+  id            String    @id @default(cuid())
+  title         String
+  artist        String
+  album         String?
+  durationMs    Int
+  fileKey       String    @unique // MinIO object key, e.g. songs/{id}/original.mp3
+  fileMimeType  String
+  fileSizeBytes Int
+  coverArtKey   String? // MinIO object key for extracted/uploaded cover art
+  categoryId    String?
+  category      Category? @relation(fields: [categoryId], references: [id])
+  tags          String[]  @default([])
+  isActive      Boolean   @default(true) // soft-disable, keeps history FKs intact
+  stationId     String? // multi-station scaffold, unused in v1
+  createdById   String?
+  createdBy     User?     @relation("SongCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  scheduledItems  ScheduledItem[]
+  playbackHistory PlaybackHistoryEntry[]
+
+  @@index([categoryId])
+  @@index([artist])
+}
+
+model Jingle {
+  id            String     @id @default(cuid())
+  title         String
+  type          JingleType @default(OTHER)
+  tags          String[]   @default([])
+  durationMs    Int
+  fileKey       String     @unique
+  fileMimeType  String
+  fileSizeBytes Int
+  isActive      Boolean    @default(true)
+  stationId     String?
+  createdById   String?
+  createdBy     User?      @relation("JingleCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  scheduledItems  ScheduledItem[]
+  playbackHistory PlaybackHistoryEntry[]
+
+  @@index([type])
+}
+
+// ── One-off scheduled items ──────────────────────────────────────────────
+
+model ScheduledItem {
+  id           String              @id @default(cuid())
+  scheduledFor DateTime
+  position     Int                 @default(0) // ordering when several items share a timestamp
+  mediaKind    MediaKind
+  songId       String?
+  song         Song?               @relation(fields: [songId], references: [id])
+  jingleId     String?
+  jingle       Jingle?             @relation(fields: [jingleId], references: [id])
+  status       ScheduledItemStatus @default(PENDING)
+  stationId    String?
+  createdById  String
+  createdBy    User                @relation(fields: [createdById], references: [id])
+  createdAt    DateTime            @default(now())
+  playedAt     DateTime?
+
+  playbackHistory PlaybackHistoryEntry[]
+
+  @@index([scheduledFor, status])
+  // NOTE: Prisma cannot express "exactly one of songId/jingleId set, matching mediaKind"
+  // as a schema-level constraint. Enforce in the application layer (zod) and optionally
+  // add a hand-written CHECK constraint via a raw-SQL migration.
+}
+
+// ── Clock wheels ─────────────────────────────────────────────────────────
+
+model ClockWheel {
+  id        String   @id @default(cuid())
+  name      String
+  isActive  Boolean  @default(true)
+  stationId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  slots           ClockWheelSlot[]
+  steps           ClockWheelStep[]
+  separationRules SeparationRule[] // future per-wheel scoping
+}
+
+model ClockWheelSlot {
+  id           String     @id @default(cuid())
+  clockWheelId String
+  clockWheel   ClockWheel @relation(fields: [clockWheelId], references: [id], onDelete: Cascade)
+  weekdays     Int[] // 0=Sun..6=Sat; e.g. Mon-Fri => [1,2,3,4,5]
+  startTime    DateTime   @db.Time()
+  endTime      DateTime   @db.Time()
+
+  @@index([clockWheelId])
+}
+
+model ClockWheelStep {
+  id                String            @id @default(cuid())
+  clockWheelId      String
+  clockWheel        ClockWheel        @relation(fields: [clockWheelId], references: [id], onDelete: Cascade)
+  order             Int
+  mediaKind         MediaKind
+  selectionStrategy SelectionStrategy
+  categoryId        String? // required when mediaKind = SONG
+  category          Category?         @relation(fields: [categoryId], references: [id])
+  tag               String? // optional filter, e.g. jingle tag
+  createdAt         DateTime          @default(now())
+
+  playbackHistory PlaybackHistoryEntry[]
+
+  @@unique([clockWheelId, order])
+}
+
+// ── Separation rules (global today, scopable later) ──────────────────────
+
+model SeparationRule {
+  id                      String              @id @default(cuid())
+  scope                   SeparationRuleScope @default(GLOBAL)
+  clockWheelId            String? // null while scope = GLOBAL
+  clockWheel              ClockWheel?         @relation(fields: [clockWheelId], references: [id])
+  artistSeparationMinutes Int                 @default(60)
+  songSeparationMinutes   Int                 @default(120)
+  updatedAt               DateTime            @updatedAt
+  updatedById             String?
+  updatedBy               User?               @relation(fields: [updatedById], references: [id])
+  // App enforces a single GLOBAL row for v1. Add via raw-SQL migration if DB-level
+  // enforcement is wanted:
+  //   CREATE UNIQUE INDEX one_global_separation_rule ON "SeparationRule" (scope)
+  //   WHERE scope = 'GLOBAL' AND "clockWheelId" IS NULL;
+}
+
+// ── External stream scheduling ────────────────────────────────────────────
+
+model ExternalStream {
+  id          String               @id @default(cuid())
+  name        String
+  url         String
+  startAt     DateTime
+  endAt       DateTime
+  status      ExternalStreamStatus @default(SCHEDULED)
+  stationId   String?
+  createdById String
+  createdBy   User                 @relation(fields: [createdById], references: [id])
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+
+  playbackHistory PlaybackHistoryEntry[]
+
+  @@index([startAt, endAt])
+}
+
+// ── Now-playing / history ─────────────────────────────────────────────────
+// Live "now playing" state is served from Redis; this table is the durable
+// append-only log used for separation-rule lookups + reporting, and can
+// reconstruct "now playing" (latest row, endedAt IS NULL) if Redis is cold.
+
+model PlaybackHistoryEntry {
+  id               String            @id @default(cuid())
+  mediaKind        PlaybackMediaKind
+  songId           String?
+  song             Song?             @relation(fields: [songId], references: [id])
+  jingleId         String?
+  jingle           Jingle?           @relation(fields: [jingleId], references: [id])
+  externalStreamId String?
+  externalStream   ExternalStream?   @relation(fields: [externalStreamId], references: [id])
+  source           PlaybackSource
+  clockWheelStepId String? // traceability: which rule picked this item
+  clockWheelStep   ClockWheelStep?   @relation(fields: [clockWheelStepId], references: [id])
+  scheduledItemId  String?
+  scheduledItem    ScheduledItem?    @relation(fields: [scheduledItemId], references: [id])
+  startedAt        DateTime
+  endedAt          DateTime?
+  durationMs       Int?
+  titleSnapshot    String // denormalized: history stays correct if Song/Jingle later edited/deleted
+  artistSnapshot   String?
+  stationId        String?
+  createdAt        DateTime          @default(now())
+
+  @@index([songId, startedAt])
+  @@index([startedAt])
+}
+
+// ── Command audit log (API -> NATS command publishing) ───────────────────
+
+model CommandAuditLog {
+  id             String   @id @default(cuid())
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id])
+  commandSubject String // e.g. "radio.encoder.cmd.advance"
+  payload        Json
+  result         String? // "published" | "rejected" | error detail
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+}

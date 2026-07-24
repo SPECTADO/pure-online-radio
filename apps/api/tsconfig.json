@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../packages/config/typescript/tsconfig.node.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    // apps/api is a runnable service, not a library any other package imports --
+    // no need for .d.ts output, and it sidesteps TS2742 "inferred type cannot be
+    // named" errors on exported Express Routers that reference deep pnpm paths.
+    "declaration": false
+  },
+  "include": ["src"]
+}

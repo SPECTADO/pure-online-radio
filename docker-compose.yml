@@ -1,0 +1,210 @@
+networks:
+  data:
+    driver: bridge
+  edge:
+    driver: bridge
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_data:
+  hls_output:
+  static_assets:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - "pg_data:/var/lib/postgresql/data"
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    volumes:
+      - "redis_data:/data"
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - "minio_data:/data"
+    networks: [data]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks: [data]
+    restart: "no"
+    entrypoint: >
+      sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/${S3_BUCKET} &&
+      mc anonymous set none local/${S3_BUCKET}
+      "
+
+  nats:
+    build:
+      context: ./infra/docker/nats
+    volumes:
+      - "./infra/docker/nats/nats-server.conf.template:/etc/nats/nats-server.conf.template:ro"
+    environment:
+      API_NATS_PASSWORD: ${API_NATS_PASSWORD}
+      ENCODER_NATS_PASSWORD: ${ENCODER_NATS_PASSWORD}
+      CONTROL_PANEL_NATS_PASSWORD: ${CONTROL_PANEL_NATS_PASSWORD}
+    # Also joins `edge`: webserver (edge-only) proxies /realtime directly to
+    # nats:9222 for browser NATS-ws. Unlike postgres/redis/minio, NATS is
+    # meant to be partially browser-reachable (with its own auth layer gating
+    # exactly what a given credential can do — see infra/docker/nats/nats-server.conf.template),
+    # so this doesn't weaken the boundary that matters (DB/cache/storage staying
+    # unreachable from edge).
+    networks: [data, edge]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api-migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: builder
+    command: ["pnpm", "--filter", "@spectado/database", "exec", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [data]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE}
+      NATS_URL: nats://nats:4222
+      NATS_USER: api
+      API_NATS_PASSWORD: ${API_NATS_PASSWORD}
+      CONTROL_PANEL_NATS_PASSWORD: ${CONTROL_PANEL_NATS_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TTL: ${JWT_ACCESS_TTL}
+      JWT_REFRESH_TTL: ${JWT_REFRESH_TTL}
+      ENCODER_CALLBACK_TOKEN: ${ENCODER_CALLBACK_TOKEN}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      # Not read by the API app itself — only so `docker compose exec api
+      # pnpm --filter @spectado/database db:seed` (per the README) picks up
+      # the real .env values instead of the seed script's hardcoded defaults.
+      SEED_ADMIN_USERNAME: ${SEED_ADMIN_USERNAME}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+    depends_on:
+      api-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    networks: [data, edge]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  encoder:
+    build:
+      context: .
+      dockerfile: apps/encoder/Dockerfile
+    environment:
+      NATS_URL: nats://nats:4222
+      NATS_USER: encoder
+      NATS_PASSWORD: ${ENCODER_NATS_PASSWORD}
+      API_CALLBACK_URL: http://api:3000/internal
+      API_CALLBACK_TOKEN: ${ENCODER_CALLBACK_TOKEN}
+      HLS_OUTPUT_DIR: /data/hls
+    volumes:
+      - "hls_output:/data/hls"
+    depends_on:
+      nats:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    networks: [data, edge]
+
+  control-panel-build:
+    build:
+      context: .
+      dockerfile: apps/control-panel/Dockerfile
+    command: ["sh", "-c", "mkdir -p /output/control-panel && cp -r /app/apps/control-panel/dist/. /output/control-panel/"]
+    volumes:
+      - "static_assets:/output"
+    restart: "no"
+
+  player-build:
+    build:
+      context: .
+      dockerfile: apps/player/Dockerfile
+    command: ["sh", "-c", "mkdir -p /output/player && cp -r /app/apps/player/dist/. /output/player/"]
+    volumes:
+      - "static_assets:/output"
+    restart: "no"
+
+  webserver:
+    build:
+      context: ./apps/webserver
+    depends_on:
+      control-panel-build:
+        condition: service_completed_successfully
+      player-build:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      encoder:
+        condition: service_started
+    volumes:
+      - "static_assets:/usr/share/nginx/html:ro"
+      - "hls_output:/var/www/hls:ro"
+    environment:
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+    networks: [edge]
+    ports:
+      - "${WEBSERVER_HOST_PORT:-80}:80"

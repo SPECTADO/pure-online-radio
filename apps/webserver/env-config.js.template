@@ -1,0 +1,4 @@
+window.__APP_CONFIG__ = {
+  apiBaseUrl: "${PUBLIC_BASE_URL}/api",
+  natsWsUrl: "${PUBLIC_BASE_URL}/realtime".replace(/^http/, "ws")
+};

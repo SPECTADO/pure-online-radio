@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+.turbo/
+*.log
+.env
+.env.*.local
+.DS_Store
+apps/*/dist/
+apps/control-panel/vite.config.ts.timestamp-*
+apps/player/vite.config.ts.timestamp-*
+packages/database/generated/
+coverage/

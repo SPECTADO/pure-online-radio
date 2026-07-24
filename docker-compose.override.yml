@@ -1,0 +1,103 @@
+# Auto-merged by `docker compose up` for local development.
+# Publishes DB/cache/storage/bus ports to the host for local GUI tools, runs
+# api/encoder from source with hot reload. The base control-panel-build/
+# player-build one-shot services still run too (so `webserver` keeps working
+# end-to-end); control-panel-dev/player-dev below are additional opt-in
+# services for live HMR — run them explicitly with
+# `docker compose up control-panel-dev player-dev` alongside the rest.
+
+services:
+  postgres:
+    ports: ["5432:5432"]
+
+  redis:
+    ports: ["6379:6379"]
+
+  minio:
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+  nats:
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+      - "9222:9222"
+
+  # NOTE: apps/api and apps/encoder Dockerfiles both use WORKDIR /workspace in
+  # their "builder" stage (unlike control-panel/player, which use /app) — the
+  # bind-mount targets below must match that or hot reload silently no-ops.
+  api:
+    build:
+      target: builder
+    command: ["pnpm", "--filter", "@spectado/api", "dev"]
+    volumes:
+      - "./apps/api:/workspace/apps/api"
+      - "./packages:/workspace/packages"
+      - "/workspace/node_modules"
+      - "/workspace/apps/api/node_modules"
+    environment:
+      NODE_ENV: development
+    ports:
+      - "3000:3000"
+
+  encoder:
+    build:
+      target: builder
+    # Dev targets the "builder" stage for hot reload, which skips the
+    # "runtime" stage's docker/entrypoint.sh (that's what creates the PCM
+    # FIFO) — recreate that same step inline here so dev mode doesn't
+    # silently run without it (see apps/encoder/docker/entrypoint.sh).
+    command:
+      [
+        "sh",
+        "-c",
+        "mkdir -p /run/encoder/pcm && [ -p /run/encoder/pcm/master.fifo ] || mkfifo /run/encoder/pcm/master.fifo && pnpm --filter @spectado/encoder dev",
+      ]
+    volumes:
+      - "./apps/encoder:/workspace/apps/encoder"
+      - "./packages:/workspace/packages"
+      - "/workspace/node_modules"
+      - "/workspace/apps/encoder/node_modules"
+    ports:
+      - "8080:8080"
+
+  control-panel-dev:
+    build:
+      context: .
+      dockerfile: apps/control-panel/Dockerfile
+      target: builder
+    # NOTE: "dev" already bakes in `vite --host` (apps/control-panel/package.json)
+    # rather than relying on `pnpm run dev -- --host` here — passing extra args
+    # through Compose's exec-form `command:` array didn't reliably strip pnpm's
+    # `--` separator, so `--host` never actually reached vite and it kept
+    # binding to the container's own localhost only, unreachable via the port
+    # mapping below.
+    command: ["pnpm", "--filter", "@spectado/control-panel", "dev"]
+    volumes:
+      - "./apps/control-panel:/app/apps/control-panel"
+      - "./packages:/app/packages"
+      - "/app/node_modules"
+      - "/app/apps/control-panel/node_modules"
+    ports:
+      - "5173:5173"
+    networks: [edge]
+    profiles: ["dev-hmr"]
+
+  player-dev:
+    build:
+      context: .
+      dockerfile: apps/player/Dockerfile
+      target: builder
+    # See the same note on control-panel-dev above — --host is baked into the
+    # "dev" script itself (apps/player/package.json), not passed here.
+    command: ["pnpm", "--filter", "@spectado/player", "dev"]
+    volumes:
+      - "./apps/player:/app/apps/player"
+      - "./packages:/app/packages"
+      - "/app/node_modules"
+      - "/app/apps/player/node_modules"
+    ports:
+      - "5174:5174"
+    networks: [edge]
+    profiles: ["dev-hmr"]

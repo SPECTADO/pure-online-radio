@@ -1,0 +1,8 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+catalog:
+  typescript: ^5.7.0
+  zod: ^3.24.0
+  vitest: ^2.1.0
