@@ -489,52 +489,46 @@ function ScratchPadSection({
 
       {jingleError && <div className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{jingleError}</div>}
 
-      {currentJingle && (
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-slate-100 bg-slate-50 px-4 py-3">
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-slate-900">{currentJingle.title}</div>
-            {jingleProgress !== null && jingleCountdown && (
-              <div className="mt-1 flex items-center gap-2">
-                <div className="w-32">
-                  <ProgressBar progress={jingleProgress} />
-                </div>
-                <span className="shrink-0 text-xs tabular-nums text-slate-500">-{jingleCountdown}</span>
-              </div>
-            )}
-          </div>
-          <button
-            type="button"
-            disabled={stopPending}
-            onClick={onStop}
-            className="shrink-0 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-          >
-            Stop
-          </button>
-        </div>
-      )}
-
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         {(slots.length > 0 ? slots : Array.from({ length: 10 }, (_, position) => ({ position, jingleId: null }))).map((slot) => {
           const jingle = slot.jingleId ? jingleById.get(slot.jingleId) : undefined;
           const isMissing = !!slot.jingleId && !jingle;
           const isPlaying = !!slot.jingleId && currentJingle?.jingleId === slot.jingleId;
+          const busy = isPlaying ? stopPending : playPending;
 
           return (
             <button
               key={slot.position}
               type="button"
-              disabled={!jingle || playPending}
-              onClick={() => jingle && onPlay(jingle.id)}
+              disabled={!jingle || busy}
+              onClick={() => {
+                if (!jingle) return;
+                if (isPlaying) onStop();
+                else onPlay(jingle.id);
+              }}
               title={jingle?.title}
-              className={`flex h-20 flex-col items-center justify-center rounded-lg border px-2 py-2 text-center text-xs font-medium transition-colors disabled:cursor-not-allowed ${
+              className={`relative isolate flex h-20 flex-col items-center justify-center overflow-hidden rounded-lg border px-2 py-2 text-center text-xs font-medium transition-colors disabled:cursor-not-allowed ${
                 isPlaying
-                  ? "border-blue-600 bg-blue-600 text-white"
+                  ? "border-blue-900 bg-blue-900 text-white"
                   : jingle
                     ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                     : "border-dashed border-slate-200 bg-slate-50 text-slate-400"
               }`}
             >
-              <span className="line-clamp-2 wrap-break-word">{jingle ? jingle.title : isMissing ? "Missing" : "Empty"}</span>
+              {isPlaying && (
+                <div
+                  className="absolute inset-y-0 left-0 bg-blue-500 transition-[width] duration-500 ease-linear"
+                  style={{ width: `${Math.min(100, (jingleProgress ?? 0) * 100)}%` }}
+                />
+              )}
+              {isPlaying && jingleCountdown && (
+                <span className="absolute right-1 top-1 z-10 text-[10px] font-semibold tabular-nums text-white">
+                  -{jingleCountdown}
+                </span>
+              )}
+              <span className="relative z-10 line-clamp-2 wrap-break-word">
+                {jingle ? jingle.title : isMissing ? "Missing" : "Empty"}
+              </span>
             </button>
           );
         })}
