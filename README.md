@@ -1,4 +1,4 @@
-# Spectado — Pure Online Radio
+# SPECTADO — Pure Online Radio
 
 A self-hosted online radio platform: a manager control panel for running the station, a public player, and an
 automated ffmpeg-based encoder that produces a continuous multi-bitrate HLS stream from a scheduled/rotated song
@@ -39,7 +39,7 @@ queue, jingles, live mic input, and external stream relays. Everything runs as a
 3. **Encoding**: the encoder mixes whatever should currently be audible (queue track, jingle overlay, live mic
    overlay, or an external relay) into a single continuous PCM bus, which a persistent ffmpeg process encodes into
    two HLS variants (low/high bitrate AAC) written to a shared volume.
-4. **Delivery**: nginx is the *only* public entry point. It serves the built control panel and player SPAs, reverse
+4. **Delivery**: nginx is the _only_ public entry point. It serves the built control panel and player SPAs, reverse
    proxies the API, serves the HLS output directly from the shared volume, and proxies both the NATS websocket
    (realtime status) and the encoder's live-mic ingestion websocket.
 5. **Realtime control**: the control panel sends commands (skip, play jingle, switch live/manual mode, start/stop
@@ -98,19 +98,19 @@ encoder only ever receives a short-lived presigned URL.
 
 ### Components
 
-| Component | Tech | Role |
-|---|---|---|
-| `apps/api` | Express 5 + TypeScript 7 + Prisma 7 | Internal API: auth, library, scheduling, clock wheels, queue resolution, NATS command publishing, encoder-facing callback |
-| `apps/encoder` | Node + TypeScript 7, orchestrates `ffmpeg` | Produces the live HLS stream; mixes queue/jingle/mic/relay audio; NATS command/status |
-| `apps/control-panel` | React 19 + React Router 7 + Vite 8 + Tailwind | Manager UI: library, queue, schedule, clock wheels, live mic, settings |
-| `apps/player` | React 19 + Vite 8 + Tailwind | Public listener page: HLS playback + now-playing metadata |
-| `apps/webserver` | nginx | Single public entry point: static SPAs, API/HLS/NATS-ws/live-mic-ws reverse proxy |
-| `packages/shared-types` | Zod 4 schemas | Wire contract shared by api/control-panel/encoder: DTOs + NATS subjects/payloads |
-| `packages/database` | Prisma 7 | Schema, migrations, seed script, driver-adapter-based `PrismaClient` singleton |
-| Postgres | — | Metadata, schedule, history, users |
-| Redis | — | Now-playing cache for the public player |
-| MinIO | S3-compatible | Song/jingle/cover-art storage (internal only; swappable for any S3-compatible provider) |
-| NATS | — | Realtime command/status bus, with websocket for the browser |
+| Component               | Tech                                          | Role                                                                                                                      |
+| ----------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api`              | Express 5 + TypeScript 7 + Prisma 7           | Internal API: auth, library, scheduling, clock wheels, queue resolution, NATS command publishing, encoder-facing callback |
+| `apps/encoder`          | Node + TypeScript 7, orchestrates `ffmpeg`    | Produces the live HLS stream; mixes queue/jingle/mic/relay audio; NATS command/status                                     |
+| `apps/control-panel`    | React 19 + React Router 7 + Vite 8 + Tailwind | Manager UI: library, queue, schedule, clock wheels, live mic, settings                                                    |
+| `apps/player`           | React 19 + Vite 8 + Tailwind                  | Public listener page: HLS playback + now-playing metadata                                                                 |
+| `apps/webserver`        | nginx                                         | Single public entry point: static SPAs, API/HLS/NATS-ws/live-mic-ws reverse proxy                                         |
+| `packages/shared-types` | Zod 4 schemas                                 | Wire contract shared by api/control-panel/encoder: DTOs + NATS subjects/payloads                                          |
+| `packages/database`     | Prisma 7                                      | Schema, migrations, seed script, driver-adapter-based `PrismaClient` singleton                                            |
+| Postgres                | —                                             | Metadata, schedule, history, users                                                                                        |
+| Redis                   | —                                             | Now-playing cache for the public player                                                                                   |
+| MinIO                   | S3-compatible                                 | Song/jingle/cover-art storage (internal only; swappable for any S3-compatible provider)                                   |
+| NATS                    | —                                             | Realtime command/status bus, with websocket for the browser                                                               |
 
 ## Repository layout
 
@@ -155,7 +155,7 @@ pnpm run dev
   `docker-compose.override.yml` merge, no profile needed;
 - `control-panel-dev`/`player-dev` additionally start (that's what the `dev-hmr` profile activates) — real Vite dev
   servers with HMR, reachable at `http://localhost:5173/manage/` and `http://localhost:5174/`;
-- the one-shot `control-panel-build`/`player-build`/`webserver` path *also* still runs alongside (harmless, just a
+- the one-shot `control-panel-build`/`player-build`/`webserver` path _also_ still runs alongside (harmless, just a
   few extra seconds of build time), so the static, production-like build stays available at
   `http://localhost:8000/` / `http://localhost:8000/manage/` too — useful for checking what an actual deploy would
   look like without leaving dev mode.
@@ -164,13 +164,13 @@ It runs in the foreground (streaming every container's logs) — `Ctrl+C` stops 
 from another terminal. If you'd rather run detached without the frontend HMR containers,
 `docker compose up -d --build` (no `--profile`) still works exactly the same way it always did.
 
-> **Don't run `pnpm dev` (or `vite`/`tsx watch`) directly *inside* `apps/api` or `apps/encoder`.** Their
+> **Don't run `pnpm dev` (or `vite`/`tsx watch`) directly _inside_ `apps/api` or `apps/encoder`.** Their
 > `DATABASE_URL`/`REDIS_URL`/`NATS_URL` use Docker-internal hostnames (`postgres`, `redis`, `nats`) that only resolve
 > from inside the Compose network, and the Dockerized containers already occupy ports 3000/8080. Both apps do load
 > `.env` automatically now (via `tsx`'s `--env-file-if-exists`) for one-off host-side scripts (e.g. `prisma studio`,
 > ad hoc queries), but their actual dev servers are meant to run inside `docker compose up`/`pnpm run dev`, not
 > standalone. `apps/control-panel`/`apps/player`, by contrast, are perfectly fine to run raw on the host if you
-> prefer (`pnpm --filter @spectado/control-panel dev`) — their dev proxy targets `localhost:3000`, which *is*
+> prefer (`pnpm --filter @spectado/control-panel dev`) — their dev proxy targets `localhost:3000`, which _is_
 > reachable from the host since Docker publishes that port; that's exactly what the `dev-hmr` profile's containers
 > do too, just inside Docker for a consistent environment across machines.
 
@@ -235,27 +235,27 @@ conveniences. Before deploying anywhere real:
 
 All environment variables are documented in `.env.example`. Notable ones:
 
-| Variable | Used by | Notes |
-|---|---|---|
-| `DATABASE_URL` | api, encoder migration tooling | Standard Prisma/Postgres connection string |
-| `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | api | MinIO today; any S3-compatible endpoint works. All four are required — the library upload routes need a real connection, unlike earlier when nothing in the API actually touched MinIO yet |
-| `MUSICBRAINZ_USER_AGENT` | api | Sent on every song metadata search request; MusicBrainz asks for a descriptive value (ideally with a contact URL) instead of an API key |
-| `API_NATS_PASSWORD` / `ENCODER_NATS_PASSWORD` / `CONTROL_PANEL_NATS_PASSWORD` | nats, api, encoder | Per-role NATS credentials; permissions enforced server-side in `infra/docker/nats/nats-server.conf.template` |
-| `ENCODER_CALLBACK_TOKEN` | api, encoder | Shared secret guarding `GET /internal/playback/next` |
-| `JWT_SECRET` | api | Signs the httpOnly access/refresh cookies issued on login |
-| `PUBLIC_BASE_URL` | api, webserver | Public origin; drives the generated `env-config.js` and the NATS-ws URL handed to the control panel |
-| `WEBSERVER_HOST_PORT` | webserver | Host port nginx binds to (default `80`) — change if that port is already taken locally |
+| Variable                                                                      | Used by                        | Notes                                                                                                                                                                                      |
+| ----------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_URL`                                                                | api, encoder migration tooling | Standard Prisma/Postgres connection string                                                                                                                                                 |
+| `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`        | api                            | MinIO today; any S3-compatible endpoint works. All four are required — the library upload routes need a real connection, unlike earlier when nothing in the API actually touched MinIO yet |
+| `MUSICBRAINZ_USER_AGENT`                                                      | api                            | Sent on every song metadata search request; MusicBrainz asks for a descriptive value (ideally with a contact URL) instead of an API key                                                    |
+| `API_NATS_PASSWORD` / `ENCODER_NATS_PASSWORD` / `CONTROL_PANEL_NATS_PASSWORD` | nats, api, encoder             | Per-role NATS credentials; permissions enforced server-side in `infra/docker/nats/nats-server.conf.template`                                                                               |
+| `ENCODER_CALLBACK_TOKEN`                                                      | api, encoder                   | Shared secret guarding `GET /internal/playback/next`                                                                                                                                       |
+| `JWT_SECRET`                                                                  | api                            | Signs the httpOnly access/refresh cookies issued on login                                                                                                                                  |
+| `PUBLIC_BASE_URL`                                                             | api, webserver                 | Public origin; drives the generated `env-config.js` and the NATS-ws URL handed to the control panel                                                                                        |
+| `WEBSERVER_HOST_PORT`                                                         | webserver                      | Host port nginx binds to (default `80`) — change if that port is already taken locally                                                                                                     |
 
 ## NATS subject contract
 
 Defined once in `packages/shared-types/src/nats/subjects.ts` and enforced at the NATS auth layer
 (`infra/docker/nats/nats-server.conf.template`) so each role can only do what it's supposed to:
 
-| Namespace | Publisher | Subscribers | Purpose |
-|---|---|---|---|
-| `radio.encoder.cmd.*` | api | encoder | Commands: advance/skip, set mode, play/stop jingle, start/stop live mic, start/stop/cancel external relay |
-| `radio.encoder.status.*` | encoder | api, control-panel (read-only) | Telemetry: now-playing, queue-advanced, jingle/live/relay start-stop, errors, heartbeat, command acks |
-| `radio.control.*` | api | control-panel (read-only) | API-originated broadcasts not sourced from the encoder: mode confirmation, queue-updated signal, alerts |
+| Namespace                | Publisher | Subscribers                    | Purpose                                                                                                   |
+| ------------------------ | --------- | ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `radio.encoder.cmd.*`    | api       | encoder                        | Commands: advance/skip, set mode, play/stop jingle, start/stop live mic, start/stop/cancel external relay |
+| `radio.encoder.status.*` | encoder   | api, control-panel (read-only) | Telemetry: now-playing, queue-advanced, jingle/live/relay start-stop, errors, heartbeat, command acks     |
+| `radio.control.*`        | api       | control-panel (read-only)      | API-originated broadcasts not sourced from the encoder: mode confirmation, queue-updated signal, alerts   |
 
 The control panel's browser NATS credential is **subscribe-only** across the board — every command flows
 browser → authenticated HTTP → API → NATS, never browser → NATS directly, so every command is authorized and
@@ -266,6 +266,7 @@ audit-logged (`CommandAuditLog` in Postgres) server-side.
 This scaffold prioritized getting real infrastructure wiring working end-to-end over feature completeness. Concretely:
 
 **Real and verified:**
+
 - Full Docker Compose stack (all 6 services + 3 one-shot init containers) builds and boots cleanly from scratch, including the database migration.
 - Login (JWT httpOnly cookies), `/auth/me`, NATS-ws credential broker.
 - NATS command publishing from the queue skip/start/mode-set endpoints, with audit logging.
@@ -290,7 +291,7 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   title/artist/album/duration on upload, editable afterward; embedded ID3 cover art is auto-extracted, or a
   cover image can be uploaded/replaced separately. Categories are user-defined and many-to-many (a song/jingle
   can belong to several); every song and jingle is always additionally attached to the fixed "ALL" category,
-  and ads are *only* ever attached to "ALL" (no user choice — see `ads.routes.ts`). Ads additionally carry a
+  and ads are _only_ ever attached to "ALL" (no user choice — see `ads.routes.ts`). Ads additionally carry a
   mandatory `activeFrom`/`activeUntil` window in the schema, enforced by request validation, though nothing
   downstream (queue resolution, below) reads it yet since that's still a stub. Song metadata can also be
   looked up externally via MusicBrainz + the Cover Art Archive (free, no API key) and applied with one click —
@@ -298,8 +299,9 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   and what's deliberately not built (audio-fingerprint auto-identification via AcoustID/Chromaprint).
 
 **Stubbed (real routes/modules exist, but return placeholder data or `501 Not Implemented`):**
+
 - Automatic queue resolution from rotation rules (time-scheduled one-off items → clock wheel → separation rules →
-  fallback category) — the manual queue above is real, but nothing yet auto-*fills* it from a clock wheel or
+  fallback category) — the manual queue above is real, but nothing yet auto-_fills_ it from a clock wheel or
   enforces separation rules; an ad's `activeFrom`/`activeUntil` window is likewise only enforced at upload/edit
   time, not when adding to the queue.
 - Clock wheels, scheduling, external streams CRUD.
@@ -314,14 +316,14 @@ compose merges list fields across `-f` files by concatenation rather than replac
 doesn't remove the first.
 
 **API container unhealthy / `NatsError: Authorization Violation`.** Check that every service reading a given NATS
-password uses the *same* env var name as `infra/docker/nats/nats-server.conf.template` expects
+password uses the _same_ env var name as `infra/docker/nats/nats-server.conf.template` expects
 (`API_NATS_PASSWORD`, `ENCODER_NATS_PASSWORD`, `CONTROL_PANEL_NATS_PASSWORD` — not a generic `NATS_PASSWORD` alias).
 After editing the template, `docker compose restart nats` — a bind-mounted config file change doesn't get picked up
 by `docker compose up` alone unless the container is actually recreated/restarted.
 
 **`nats` container exits with `variable reference for '...' could not be parsed`.** The NATS container's
 `docker-entrypoint.sh` pre-resolves `${VAR}` placeholders in the template via `envsubst` into a fully-quoted config
-*before* `nats-server` ever reads it — deliberately, since `nats-server`'s own `$VAR` substitution is unreliable for
+_before_ `nats-server` ever reads it — deliberately, since `nats-server`'s own `$VAR` substitution is unreliable for
 arbitrary secrets (a quoted `"$VAR"` reference silently doesn't substitute at all; an unquoted one substitutes raw
 text that then breaks the moment a generated password happens to start with a digit, since its parser tries to read
 it as a number). If you see this error, something is bypassing that entrypoint (e.g. the image wasn't rebuilt after
@@ -333,13 +335,13 @@ time by default and hard-crashes if that container isn't registered on the netwo
 config uses Docker's embedded DNS resolver (`127.0.0.11`) plus a `set $x_upstream ...;` variable per proxied backend
 so hostnames are re-resolved lazily per-request instead of once at boot — `docker-compose.yml` also lists `nats`/
 `encoder` in `webserver`'s `depends_on` as a first line of defense. If you add another proxied backend, follow the
-same pattern (`set` the variable, *then* any `rewrite ... break`, *then* a `proxy_pass` with no trailing URI) — see
+same pattern (`set` the variable, _then_ any `rewrite ... break`, _then_ a `proxy_pass` with no trailing URI) — see
 the next entry for why the ordering matters.
 
 **`/api/*` returns nginx's own error page instead of the API's response** (e.g. a raw 500 "invalid URL prefix", or
 every request landing on the same route regardless of path). This is the classic nginx pitfall that comes with using
 a variable in `proxy_pass` (done here for the lazy-DNS reason above): a variable disables nginx's normal "replace the
-matched location prefix" URI rewriting, so `proxy_pass http://$var/;` would forward the literal path `/` for *every*
+matched location prefix" URI rewriting, so `proxy_pass http://$var/;` would forward the literal path `/` for _every_
 request, dropping the actual path entirely. The fix already in place is `rewrite ^/api/(.*)$ /$1 break;` followed by
 a `proxy_pass` with no URI part (so it just forwards the already-rewritten current request URI) — but the `set` for
 the variable must come **before** the `rewrite ... break`, not after, since `break` halts all further rewrite-phase
@@ -351,7 +353,7 @@ real, not just in theory: a single generic `location ~* \.(js|css|...)$ { add_he
 headers to hashed assets will **win over** the SPA's own `location /` or `location /manage/` prefix block — nginx
 always prefers a regex location over a prefix location regardless of file order — and since that regex location
 defines no `root`/`alias` of its own, it falls back to nginx's compiled-in default document root instead of either
-SPA's real one, 404ing every asset. The fix is two *path-scoped* regex locations (`^/assets/...` for the player,
+SPA's real one, 404ing every asset. The fix is two _path-scoped_ regex locations (`^/assets/...` for the player,
 `^/manage/assets/...` for the control panel), each with its own explicit `alias` using the regex capture group. If
 you add a third static app, give its hashed-asset location the same treatment rather than reaching for one generic
 catch-all regex.
@@ -379,7 +381,7 @@ SameSite=Strict` with **no** `Secure`.
 times: nginx's `location /manage/` and `location /realtime/` are prefix matches that require the trailing slash to
 already be part of the request URI — a bare `/manage` or `/realtime` doesn't match either and falls through to the
 player SPA's `location /` instead, which returns a normal 200 HTML response (not a 101 WebSocket upgrade). The two
-cases needed *different* fixes: `/manage` got an explicit `location = /manage { return 301 $scheme://$http_host/manage/; }`
+cases needed _different_ fixes: `/manage` got an explicit `location = /manage { return 301 $scheme://$http_host/manage/; }`
 redirect (note `$http_host`, not `$host` — `$host` drops the port, and nginx would otherwise build the redirect
 against its own internal listening port rather than the externally-mapped `WEBSERVER_HOST_PORT`). `/realtime`
 could **not** use a redirect — WebSocket clients don't follow HTTP redirects during the handshake — so that one had
@@ -406,7 +408,7 @@ in the fresh image, but the running dev container still couldn't resolve it unti
 
 **Migrating Prisma major versions (e.g. the 6→7 jump this project already made).** A few non-obvious, verified-the-
 hard-way changes if you're bumping further: (1) `datasource { url = env(...) }` in `schema.prisma` is now a hard
-validation error (`P1012`) — the connection URL lives *only* in `prisma.config.ts` (`packages/database/prisma.config.ts`)
+validation error (`P1012`) — the connection URL lives _only_ in `prisma.config.ts` (`packages/database/prisma.config.ts`)
 now. (2) That config file's `datasource.url` is evaluated for **every** Prisma command, including `generate`, which
 never needed a real connection before — reading `process.env.DATABASE_URL` directly with a placeholder fallback
 (rather than the stricter `env()` helper, which throws on a missing var) is what keeps `generate` working during
@@ -414,7 +416,7 @@ never needed a real connection before — reading `process.env.DATABASE_URL` dir
 `prisma-client` generator (replacing `prisma-client-js`) outputs plain, uncompiled `.ts` files to your chosen
 `output` path (e.g. `packages/database/generated/prisma/client.ts`) — no `package.json`/`exports` field, so import it
 by its actual file path (with this repo's usual `.js`-suffixed relative-import convention), not as if it were an
-installed package. (4) The generated client's *internals* still import `@prisma/client` for shared runtime helpers
+installed package. (4) The generated client's _internals_ still import `@prisma/client` for shared runtime helpers
 even though your own code no longer needs to — don't remove it from `package.json` just because nothing you wrote
 imports it directly. (5) A driver adapter (`@prisma/adapter-pg` here) is mandatory — `new PrismaClient()` with no
 arguments no longer works at all.
@@ -426,16 +428,18 @@ container is actually running (both the `builder` and `runtime` stages install i
 exactly this reason).
 
 **Rotated a password in `.env` and now `api-migrate`/`api` can't authenticate to Postgres.** Postgres (and MinIO)
-only use their root password env vars to initialize a *fresh* data volume — changing `.env` and restarting an
-already-initialized container does not rotate the real stored credential, it just changes what the *other* services
+only use their root password env vars to initialize a _fresh_ data volume — changing `.env` and restarting an
+already-initialized container does not rotate the real stored credential, it just changes what the _other_ services
 now try to connect with. Rotate it in place instead of wiping data:
+
 ```bash
 docker run --rm --network <project>_data -e PGPASSWORD=<old password> postgres:16-alpine \
   psql -h postgres -U radio -d radio -c "ALTER ROLE radio WITH PASSWORD '<new password>';"
 ```
+
 (Redis is the exception — `requirepass` isn't stored in its persisted data at all, so recreating that one container,
 e.g. `docker compose up -d --force-recreate redis`, is enough.)
 
 **`prisma.user... The table does not exist`.** No migration has been generated yet — see the `prisma migrate dev
 --name init` step in [Getting started](#getting-started-local-development). `prisma migrate deploy` (what the
-`api-migrate` service runs) only *applies* existing migration files, it doesn't generate new ones from the schema.
+`api-migrate` service runs) only _applies_ existing migration files, it doesn't generate new ones from the schema.
