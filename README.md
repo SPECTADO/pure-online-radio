@@ -297,6 +297,16 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   looked up externally via MusicBrainz + the Cover Art Archive (free, no API key) and applied with one click —
   see `apps/api/src/modules/library/metadataProviders/musicBrainzProvider.ts` for why that provider was picked
   and what's deliberately not built (audio-fingerprint auto-identification via AcoustID/Chromaprint).
+- **Dashboard scratch pad** — a 2×5 grid of manager-assignable jingle shortcut buttons on the Dashboard (right
+  panel), each triggering the same real jingle-overlay play as the quick search. Assignments are configured on the
+  new Settings → Scratch Pad page and persist to a `ScratchPad` singleton row (`GET/PUT /settings/scratch-pad`,
+  same findFirst-or-create pattern as `StationSettings`). The big OFF/AUTO/MANUAL pill is a real button (click to
+  toggle `POST /queue/mode`, disabled while OFF/silence); the ON AIR/off air pill calls the real (still-stubbed)
+  `POST /live-mic/session` endpoint and surfaces its 501 like any other not-yet-built action — there's no real
+  live-mic session to read until that feature (below) is built, so it always reads "off air" today.
+- **12h/24h clock format** — a station-wide display preference (`StationSettings.timeFormat`, Settings → Station
+  Settings → Display), read via `useTimeFormat()` and applied everywhere a clock time is rendered (Dashboard,
+  Queue, Schedule, Ads, External Streams, Separation Rules).
 
 **Stubbed (real routes/modules exist, but return placeholder data or `501 Not Implemented`):**
 

@@ -89,6 +89,7 @@ model User {
   createdExternalStreams  ExternalStream[]
   updatedSeparationRules  SeparationRule[]
   updatedStationSettings  StationSettings[]
+  updatedScratchPads      ScratchPad[]
   commandAuditLogs        CommandAuditLog[]
 }
 
@@ -286,9 +287,20 @@ model StationSettings {
   logoKey      String? // MinIO object key, square image
   logoMimeType String?
   links        Json     @default("[]") // StationLinkDTO[] -- {platform, url, label?}
+  timeFormat   String   @default("12h") // TimeFormat -- "12h" | "24h"
   updatedAt    DateTime @updatedAt
   updatedById  String?
   updatedBy    User?    @relation(fields: [updatedById], references: [id])
+}
+
+// 2x5 grid of manager-assignable jingle shortcuts on the Dashboard -- singleton
+// row, same findFirst-or-create pattern as StationSettings above.
+model ScratchPad {
+  id          String   @id @default(cuid())
+  slots       Json     @default("[]") // ScratchPadSlotDTO[] -- {position, jingleId}[]
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+  updatedBy   User?    @relation(fields: [updatedById], references: [id])
 }
 
 // ── External stream scheduling ────────────────────────────────────────────

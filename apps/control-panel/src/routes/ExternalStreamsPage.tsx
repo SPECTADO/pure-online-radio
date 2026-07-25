@@ -3,8 +3,10 @@ import type { ExternalStreamDTO } from "@spectado/shared-types";
 import { apiClient, ApiError } from "../lib/apiClient";
 import { ComingSoon } from "../components/ComingSoon";
 import { formatDateTime } from "../lib/format";
+import { useTimeFormat } from "../lib/useTimeFormat";
 
 export function ExternalStreamsPage() {
+  const timeFormat = useTimeFormat();
   const query = useQuery({
     queryKey: ["external-streams"],
     queryFn: () => apiClient.get<ExternalStreamDTO[]>("/external-streams"),
@@ -54,8 +56,8 @@ export function ExternalStreamsPage() {
                 <tr key={stream.id}>
                   <td className="px-4 py-3 font-medium text-slate-900">{stream.name}</td>
                   <td className="max-w-xs truncate px-4 py-3 text-slate-600">{stream.url}</td>
-                  <td className="px-4 py-3 text-slate-600">{formatDateTime(stream.startAt)}</td>
-                  <td className="px-4 py-3 text-slate-600">{formatDateTime(stream.endAt)}</td>
+                  <td className="px-4 py-3 text-slate-600">{formatDateTime(stream.startAt, timeFormat)}</td>
+                  <td className="px-4 py-3 text-slate-600">{formatDateTime(stream.endAt, timeFormat)}</td>
                   <td className="px-4 py-3 text-slate-600">{stream.status}</td>
                 </tr>
               ))}

@@ -21,5 +21,8 @@ export const CreateQueueEntryRequestSchema = z.object({
   mediaKind: MediaKindSchema,
   mediaId: z.string(),
   scheduledFor: z.string().datetime().nullable().optional(),
+  // Insert at the front of the manual queue (plays right after whatever's
+  // currently airing) instead of appending to the back.
+  playNext: z.boolean().optional(),
 });
 export type CreateQueueEntryRequestDTO = z.infer<typeof CreateQueueEntryRequestSchema>;

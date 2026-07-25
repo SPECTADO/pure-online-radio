@@ -3,10 +3,12 @@ import type { QueueEntryDTO } from "@spectado/shared-types";
 import { apiClient, ApiError } from "../lib/apiClient";
 import { ComingSoon } from "../components/ComingSoon";
 import { formatDateTime } from "../lib/format";
+import { useTimeFormat } from "../lib/useTimeFormat";
 
 /** Time-scheduled ("play at/after T") entries — a filtered view over the same
  * shape as the manual queue, surfaced at its own resource route. */
 export function SchedulePage() {
+  const timeFormat = useTimeFormat();
   const query = useQuery({
     queryKey: ["schedule"],
     queryFn: () => apiClient.get<QueueEntryDTO[]>("/schedule"),
@@ -61,7 +63,7 @@ export function SchedulePage() {
                       {entry.mediaKind} <span className="text-slate-400">#{entry.mediaId}</span>
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      {formatDateTime(entry.scheduledFor)}
+                      {formatDateTime(entry.scheduledFor, timeFormat)}
                     </td>
                     <td className="px-4 py-3 text-slate-600">{entry.status}</td>
                   </tr>

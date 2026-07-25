@@ -72,7 +72,7 @@ queueRoutes.post("/items", async (req, res) => {
     return;
   }
 
-  const { mediaKind, mediaId } = parsed.data;
+  const { mediaKind, mediaId, playNext } = parsed.data;
   const media = await findActiveMedia(mediaKind, mediaId);
   if (!media) {
     res.status(404).json({ error: `${mediaKind.toLowerCase()} not found` });
@@ -83,11 +83,23 @@ queueRoutes.post("/items", async (req, res) => {
     return;
   }
 
-  const { _max } = await prisma.scheduledItem.aggregate({
-    where: { status: "PENDING", scheduledFor: null },
-    _max: { position: true },
-  });
-  const position = (_max.position ?? 0) + 1;
+  // "Play next" prepends (lowest position - 1) instead of appending
+  // (highest position + 1) -- position is just a sort key, not a dense
+  // index, so negative/non-contiguous values are fine.
+  let position: number;
+  if (playNext) {
+    const { _min } = await prisma.scheduledItem.aggregate({
+      where: { status: "PENDING", scheduledFor: null },
+      _min: { position: true },
+    });
+    position = (_min.position ?? 1) - 1;
+  } else {
+    const { _max } = await prisma.scheduledItem.aggregate({
+      where: { status: "PENDING", scheduledFor: null },
+      _max: { position: true },
+    });
+    position = (_max.position ?? 0) + 1;
+  }
 
   const item = await prisma.scheduledItem.create({
     data: {

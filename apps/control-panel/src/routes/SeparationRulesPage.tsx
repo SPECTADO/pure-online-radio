@@ -3,8 +3,10 @@ import type { SeparationRulesDTO } from "@spectado/shared-types";
 import { apiClient, ApiError } from "../lib/apiClient";
 import { ComingSoon } from "../components/ComingSoon";
 import { formatDateTime } from "../lib/format";
+import { useTimeFormat } from "../lib/useTimeFormat";
 
 export function SeparationRulesPage() {
+  const timeFormat = useTimeFormat();
   const query = useQuery({
     queryKey: ["settings", "separation-rules"],
     queryFn: () => apiClient.get<SeparationRulesDTO>("/settings/separation-rules"),
@@ -47,7 +49,7 @@ export function SeparationRulesPage() {
             </div>
             <div className="flex items-center justify-between border-t border-slate-100 pt-4">
               <dt className="text-xs text-slate-400">Last updated</dt>
-              <dd className="text-xs text-slate-400">{formatDateTime(query.data.updatedAt)}</dd>
+              <dd className="text-xs text-slate-400">{formatDateTime(query.data.updatedAt, timeFormat)}</dd>
             </div>
           </dl>
           <p className="mt-4 text-xs text-slate-400">

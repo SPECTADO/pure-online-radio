@@ -7,6 +7,7 @@ import { showToast } from "../lib/toastStore";
 import { useNatsSubject } from "../lib/natsClient";
 import { useAddToQueue } from "../lib/useAddToQueue";
 import { useCountdownTo } from "../lib/useCountdownTo";
+import { useTimeFormat } from "../lib/useTimeFormat";
 import { withExpectedStartTimes } from "../lib/queueTiming";
 import { ComingSoon } from "../components/ComingSoon";
 import { Modal } from "../components/Modal";
@@ -23,6 +24,7 @@ const MAX_SEARCH_RESULTS = 20;
 export function QueuePage() {
   const queryClient = useQueryClient();
   const addToQueue = useAddToQueue();
+  const timeFormat = useTimeFormat();
   const [search, setSearch] = useState("");
   const [pendingRemove, setPendingRemove] = useState<QueueEntryDTO | null>(null);
 
@@ -190,14 +192,14 @@ export function QueuePage() {
                   <td className="px-4 py-3 text-slate-600">{entry.mediaKind}</td>
                   <td className="px-4 py-3 text-slate-600">{formatDuration(entry.durationMs)}</td>
                   <td className="px-4 py-3 text-slate-600">
-                    {formatTimeOfDay(entry.expectedStartAt)}
+                    {formatTimeOfDay(entry.expectedStartAt, timeFormat)}
                     {index === 0 && firstItemCountdownMs !== null && (
                       <span className="ml-2 text-xs tabular-nums text-slate-400">
                         (in {formatDuration(firstItemCountdownMs)})
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-slate-600">{formatDateTime(entry.addedAt)}</td>
+                  <td className="px-4 py-3 text-slate-600">{formatDateTime(entry.addedAt, timeFormat)}</td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-2">
                       <button

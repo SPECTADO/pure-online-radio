@@ -1,3 +1,5 @@
+import type { TimeFormat } from "@spectado/shared-types";
+
 /** "3:07"-style duration formatting for durationMs fields shared across DTOs. */
 export function formatDuration(durationMs: number): string {
   const totalSeconds = Math.round(durationMs / 1000);
@@ -6,15 +8,16 @@ export function formatDuration(durationMs: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-/** "3:45 PM"-style clock time (no date) for an epoch-ms timestamp. */
-export function formatTimeOfDay(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+/** "3:45 PM"-style clock time (no date) for an epoch-ms timestamp -- respects
+ * the station's 12h/24h display preference (see lib/useTimeFormat.ts). */
+export function formatTimeOfDay(ms: number, timeFormat: TimeFormat = "12h"): string {
+  return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: timeFormat === "12h" });
 }
 
-export function formatDateTime(iso: string | null): string {
+export function formatDateTime(iso: string | null, timeFormat: TimeFormat = "12h"): string {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleString();
+    return new Date(iso).toLocaleString([], { hour12: timeFormat === "12h" });
   } catch {
     return iso;
   }

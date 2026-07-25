@@ -22,6 +22,7 @@ stationRoutes.patch("/", stationLogoUpload, async (req, res) => {
     description: req.body.description === "" ? null : optionalStringField(req.body.description) ?? null,
     links: req.body.links ? JSON.parse(req.body.links) : [],
     removeLogo: req.body.removeLogo === "true",
+    timeFormat: optionalStringField(req.body.timeFormat),
   });
   if (!parsed.success) {
     res.status(400).json({ error: "invalid request", details: parsed.error.issues });
@@ -33,6 +34,7 @@ stationRoutes.patch("/", stationLogoUpload, async (req, res) => {
     name: parsed.data.name,
     description: parsed.data.description ?? null,
     links: parsed.data.links as Prisma.InputJsonValue,
+    timeFormat: parsed.data.timeFormat,
   };
 
   const logoFile = req.file;

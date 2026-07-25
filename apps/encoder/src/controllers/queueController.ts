@@ -1,5 +1,6 @@
 import type {
   AdvanceCommand,
+  NowPlayingStatus,
   PlaybackMode,
   SetModeCommand,
   TrackDirectiveDTO,
@@ -34,6 +35,7 @@ export class QueueController {
   private currentMediaId: string | null = null;
   private advanceTimer: NodeJS.Timeout | null = null;
   private mode: PlaybackMode = "LIVE";
+  private lastNowPlaying: NowPlayingStatus | null = null;
 
   constructor(
     private readonly mixer: Mixer,
@@ -52,14 +54,40 @@ export class QueueController {
   }
 
   async handleSetMode(command: SetModeCommand): Promise<void> {
+    const previousMode = this.mode;
     this.mode = command.mode;
     this.logger.info({ mode: this.mode }, "playback mode changed");
+
+    // Switching into AUTO while sitting on manual-mode silence resumes
+    // playback immediately rather than waiting for an explicit skip.
+    if (previousMode === "MANUAL" && this.mode === "LIVE" && !this.currentSource) {
+      void this.advance("auto");
+      return;
+    }
+
+    // No advance triggered above -- the dashboard's AUTO/MANUAL pill has
+    // nothing else to react to until the next real now-playing event (which
+    // might be minutes away, or never if nothing is currently playing), so
+    // push the mode change to clients immediately.
+    if (this.lastNowPlaying) {
+      this.publishStatus({ ...this.lastNowPlaying, mode: this.mode, ts: new Date().toISOString() });
+    }
   }
 
   private async advance(reason: AdvanceCommand["reason"] | "auto"): Promise<void> {
     this.clearAdvanceTimer();
     const previousTrackId = this.currentMediaId;
     this.teardownCurrentSource();
+
+    // MANUAL mode: only an explicit AdvanceCommand (skip) moves playback
+    // forward. An "auto" trigger (track ended, boot, silence retry, a
+    // stalled-source safety margin) just holds silence until the user clicks
+    // Skip -- and mustn't call fetchNextDirective, which has the side effect
+    // of dequeuing the head of the queue, since nothing is going to play it.
+    if (reason === "auto" && this.mode === "MANUAL") {
+      this.mountSilence();
+      return;
+    }
 
     const directive = await this.apiClient.fetchNextDirective();
     if (!directive) {
@@ -99,7 +127,7 @@ export class QueueController {
     this.mixer.setPrimarySource(source, "track");
 
     const ts = new Date().toISOString();
-    this.statusPublisher.publishNowPlaying({
+    this.publishStatus({
       ts,
       trackId: directive.mediaId,
       isLive: true,
@@ -126,7 +154,7 @@ export class QueueController {
     this.currentMediaId = null;
     this.mixer.setPrimarySource(new SilenceSource(), "none");
 
-    this.statusPublisher.publishNowPlaying({
+    this.publishStatus({
       ts: new Date().toISOString(),
       trackId: null,
       isLive: false,
@@ -139,6 +167,11 @@ export class QueueController {
       durationMs: null,
       mode: this.mode,
     });
+  }
+
+  private publishStatus(status: NowPlayingStatus): void {
+    this.lastNowPlaying = status;
+    this.statusPublisher.publishNowPlaying(status);
   }
 
   private teardownCurrentSource(): void {

@@ -12,6 +12,7 @@ import { ClockWheelEditorPage } from "./routes/ClockWheelEditorPage";
 import { ExternalStreamsPage } from "./routes/ExternalStreamsPage";
 import { SeparationRulesPage } from "./routes/SeparationRulesPage";
 import { StationSettingsPage } from "./routes/StationSettingsPage";
+import { ScratchPadSettingsPage } from "./routes/ScratchPadSettingsPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
 
 export function App() {
@@ -32,6 +33,7 @@ export function App() {
           <Route path="external-streams" element={<ExternalStreamsPage />} />
           <Route path="settings/separation-rules" element={<SeparationRulesPage />} />
           <Route path="settings/station" element={<StationSettingsPage />} />
+          <Route path="settings/scratch-pad" element={<ScratchPadSettingsPage />} />
         </Route>
 
         <Route path="*" element={<NotFoundPage />} />

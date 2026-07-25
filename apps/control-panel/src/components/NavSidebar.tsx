@@ -42,6 +42,7 @@ const NAV_GROUPS: NavGroup[] = [
     children: [
       { to: "/settings/station", label: "Station Settings" },
       { to: "/settings/separation-rules", label: "Separation Rules" },
+      { to: "/settings/scratch-pad", label: "Scratch Pad" },
     ],
   },
 ];

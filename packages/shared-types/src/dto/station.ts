@@ -20,6 +20,9 @@ export const StationLinkSchema = z.object({
 });
 export type StationLinkDTO = z.infer<typeof StationLinkSchema>;
 
+export const TimeFormatSchema = z.enum(["12h", "24h"]);
+export type TimeFormat = z.infer<typeof TimeFormatSchema>;
+
 export const StationSettingsSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
@@ -27,6 +30,9 @@ export const StationSettingsSchema = z.object({
   // never-a-direct-MinIO-URL convention as song/jingle cover art.
   logoUrl: z.string().nullable(),
   links: z.array(StationLinkSchema),
+  // Station-wide display preference (not per-manager) -- read by every clock
+  // time shown in the control panel, e.g. lib/format.ts's formatTimeOfDay.
+  timeFormat: TimeFormatSchema,
   updatedAt: z.string().datetime(),
 });
 export type StationSettingsDTO = z.infer<typeof StationSettingsSchema>;
@@ -36,5 +42,6 @@ export const UpdateStationSettingsRequestSchema = z.object({
   description: z.string().nullable().optional(),
   links: z.array(StationLinkSchema),
   removeLogo: z.boolean().optional(),
+  timeFormat: TimeFormatSchema.default("12h"),
 });
 export type UpdateStationSettingsRequestDTO = z.infer<typeof UpdateStationSettingsRequestSchema>;

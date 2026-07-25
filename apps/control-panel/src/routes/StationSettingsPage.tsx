@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { StationLinkDTO, StationLinkPlatform, StationSettingsDTO } from "@spectado/shared-types";
+import type { StationLinkDTO, StationLinkPlatform, StationSettingsDTO, TimeFormat } from "@spectado/shared-types";
 import { StationLinkPlatformSchema } from "@spectado/shared-types";
 import { apiClient, apiUrl, ApiError } from "../lib/apiClient";
 import { showToast } from "../lib/toastStore";
@@ -36,6 +36,7 @@ export function StationSettingsPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [links, setLinks] = useState<StationLinkDTO[]>([]);
+  const [timeFormat, setTimeFormat] = useState<TimeFormat>("12h");
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreviewUrl, setLogoPreviewUrl] = useState<string | null>(null);
   const [removeLogo, setRemoveLogo] = useState(false);
@@ -59,6 +60,7 @@ export function StationSettingsPage() {
     setName(query.data.name);
     setDescription(query.data.description ?? "");
     setLinks(query.data.links);
+    setTimeFormat(query.data.timeFormat);
   }, [query.data]);
 
   const updateMutation = useMutation({
@@ -100,6 +102,7 @@ export function StationSettingsPage() {
       "links",
       JSON.stringify(links.map((link) => ({ ...link, url: link.url.trim() })).filter((link) => link.url !== "")),
     );
+    formData.set("timeFormat", timeFormat);
     if (logoFile) {
       formData.set("logo", logoFile);
     } else if (removeLogo) {
@@ -177,6 +180,30 @@ export function StationSettingsPage() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white p-6">
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">
+              Display
+            </h2>
+
+            <span className={labelClass}>Clock time format</span>
+            <div className="flex gap-2">
+              {(["12h", "24h"] as const).map((format) => (
+                <button
+                  key={format}
+                  type="button"
+                  onClick={() => setTimeFormat(format)}
+                  className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+                    timeFormat === format
+                      ? "bg-slate-900 text-white"
+                      : "border border-slate-300 text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {format === "12h" ? "12-hour (3:45 PM)" : "24-hour (15:45)"}
+                </button>
+              ))}
             </div>
           </div>
 

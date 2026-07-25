@@ -12,6 +12,7 @@ import { PreviewButton } from "../components/PreviewButton";
 import { AdUploadModal } from "../components/AdUploadModal";
 import { AdEditModal } from "../components/AdEditModal";
 import { formatDateTime, formatDuration } from "../lib/format";
+import { useTimeFormat } from "../lib/useTimeFormat";
 
 const selectClass =
   "rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
@@ -54,6 +55,7 @@ export function AdsLibraryPage() {
   const queryClient = useQueryClient();
   const stopPreview = useAudioPreviewStore((s) => s.stop);
   const addToQueue = useAddToQueue();
+  const timeFormat = useTimeFormat();
   const query = useQuery({
     queryKey: ["library", "ads"],
     queryFn: () => apiClient.get<AdDTO[]>("/library/ads"),
@@ -165,8 +167,8 @@ export function AdsLibraryPage() {
                     <PreviewButton id={ad.id} path={`/library/ads/${ad.id}/audio`} />
                   </td>
                   <td className="px-4 py-3 font-medium text-slate-900">{ad.title}</td>
-                  <td className="px-4 py-3 text-slate-600">{formatDateTime(ad.activeFrom)}</td>
-                  <td className="px-4 py-3 text-slate-600">{formatDateTime(ad.activeUntil)}</td>
+                  <td className="px-4 py-3 text-slate-600">{formatDateTime(ad.activeFrom, timeFormat)}</td>
+                  <td className="px-4 py-3 text-slate-600">{formatDateTime(ad.activeUntil, timeFormat)}</td>
                   <td className="px-4 py-3 text-slate-600">{formatDuration(ad.durationMs)}</td>
                   <td className="px-4 py-3">
                     <AdStatusBadge ad={ad} />
