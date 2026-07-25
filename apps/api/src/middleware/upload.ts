@@ -11,8 +11,8 @@ function fileFilter(
   file: Express.Multer.File,
   cb: (error: Error | null, acceptFile?: boolean) => void,
 ) {
-  if (file.fieldname === "coverArt") {
-    cb(file.mimetype.startsWith("image/") ? null : new Error("coverArt must be an image file"), true);
+  if (file.fieldname === "coverArt" || file.fieldname === "logo") {
+    cb(file.mimetype.startsWith("image/") ? null : new Error(`${file.fieldname} must be an image file`), true);
     return;
   }
   cb(file.mimetype.startsWith("audio/") ? null : new Error("file must be an audio file"), true);
@@ -39,3 +39,10 @@ export const songUpload = multer({
   { name: "file", maxCount: 1 },
   { name: "coverArt", maxCount: 1 },
 ]);
+
+/** Single optional image file under field name "logo" -- station branding. */
+export const stationLogoUpload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: MAX_IMAGE_BYTES },
+}).single("logo");

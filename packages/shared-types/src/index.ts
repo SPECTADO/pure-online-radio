@@ -12,6 +12,7 @@ export * from "./dto/external-stream.js";
 export * from "./dto/now-playing.js";
 export * from "./dto/playback-directive.js";
 export * from "./dto/live-mic.js";
+export * from "./dto/station.js";
 
 export * from "./nats/subjects.js";
 export * from "./nats/messages.js";

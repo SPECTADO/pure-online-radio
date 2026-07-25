@@ -4,6 +4,7 @@ import Hls from "hls.js";
 interface AudioElementProps {
   playing: boolean;
   muted: boolean;
+  volume: number;
   onError?: (message: string) => void;
 }
 
@@ -11,7 +12,7 @@ const STREAM_URL = "/master.m3u8";
 
 /** Wraps a plain <audio> element, feeding it the live HLS stream via hls.js
  * where supported, falling back to the native HLS support Safari ships with. */
-export function AudioElement({ playing, muted, onError }: AudioElementProps) {
+export function AudioElement({ playing, muted, volume, onError }: AudioElementProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const onErrorRef = useRef(onError);
 
@@ -54,6 +55,11 @@ export function AudioElement({ playing, muted, onError }: AudioElementProps) {
     const audio = audioRef.current;
     if (audio) audio.muted = muted;
   }, [muted]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (audio) audio.volume = volume;
+  }, [volume]);
 
   useEffect(() => {
     const audio = audioRef.current;

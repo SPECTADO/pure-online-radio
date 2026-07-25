@@ -20,6 +20,7 @@ import { queueRoutes } from "./modules/queue/queue.routes.js";
 import { realtimeRoutes } from "./modules/realtime/realtime.routes.js";
 import { scheduleRoutes } from "./modules/schedule/schedule.routes.js";
 import { separationRulesRoutes } from "./modules/settings/separationRules.routes.js";
+import { stationRoutes } from "./modules/settings/station.routes.js";
 import { isNatsConnected } from "./nats/client.js";
 import { redis } from "./redis/client.js";
 
@@ -71,6 +72,7 @@ export function createApp(): Express {
   app.use("/schedule", scheduleRoutes);
   app.use("/clock-wheels", clockWheelsRoutes);
   app.use("/settings/separation-rules", separationRulesRoutes);
+  app.use("/settings/station", stationRoutes);
   app.use("/external-streams", externalStreamsRoutes);
   app.use("/live-mic", liveMicRoutes);
   app.use("/internal", internalRoutes);

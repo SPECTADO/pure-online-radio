@@ -11,6 +11,7 @@ import { ClockWheelsListPage } from "./routes/ClockWheelsListPage";
 import { ClockWheelEditorPage } from "./routes/ClockWheelEditorPage";
 import { ExternalStreamsPage } from "./routes/ExternalStreamsPage";
 import { SeparationRulesPage } from "./routes/SeparationRulesPage";
+import { StationSettingsPage } from "./routes/StationSettingsPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
 
 export function App() {
@@ -30,6 +31,7 @@ export function App() {
           <Route path="clock-wheels/:id" element={<ClockWheelEditorPage />} />
           <Route path="external-streams" element={<ExternalStreamsPage />} />
           <Route path="settings/separation-rules" element={<SeparationRulesPage />} />
+          <Route path="settings/station" element={<StationSettingsPage />} />
         </Route>
 
         <Route path="*" element={<NotFoundPage />} />

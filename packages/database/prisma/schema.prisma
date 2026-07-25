@@ -85,10 +85,11 @@ model User {
   createdSongs           Song[]                @relation("SongCreatedBy")
   createdJingles         Jingle[]               @relation("JingleCreatedBy")
   createdAds             Ad[]                  @relation("AdCreatedBy")
-  createdScheduledItems  ScheduledItem[]
-  createdExternalStreams ExternalStream[]
-  updatedSeparationRules SeparationRule[]
-  commandAuditLogs       CommandAuditLog[]
+  createdScheduledItems   ScheduledItem[]
+  createdExternalStreams  ExternalStream[]
+  updatedSeparationRules  SeparationRule[]
+  updatedStationSettings  StationSettings[]
+  commandAuditLogs        CommandAuditLog[]
 }
 
 // ── Library: songs & jingles ─────────────────────────────────────────────
@@ -272,6 +273,22 @@ model SeparationRule {
   // enforcement is wanted:
   //   CREATE UNIQUE INDEX one_global_separation_rule ON "SeparationRule" (scope)
   //   WHERE scope = 'GLOBAL' AND "clockWheelId" IS NULL;
+}
+
+// ── Station branding (name/logo/description/links) ───────────────────────
+// A single row (app enforces this via findFirst-or-create, same pattern as
+// the single GLOBAL SeparationRule above) -- public-readable, manager-editable.
+
+model StationSettings {
+  id           String   @id @default(cuid())
+  name         String   @default("Spectado Radio")
+  description  String?
+  logoKey      String? // MinIO object key, square image
+  logoMimeType String?
+  links        Json     @default("[]") // StationLinkDTO[] -- {platform, url, label?}
+  updatedAt    DateTime @updatedAt
+  updatedById  String?
+  updatedBy    User?    @relation(fields: [updatedById], references: [id])
 }
 
 // ── External stream scheduling ────────────────────────────────────────────

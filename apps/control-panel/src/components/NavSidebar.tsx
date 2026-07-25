@@ -1,4 +1,7 @@
 import { NavLink } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import type { StationSettingsDTO } from "@spectado/shared-types";
+import { apiClient } from "../lib/apiClient";
 
 const NAV_ITEMS = [
   { to: "/", label: "Dashboard", end: true },
@@ -10,12 +13,20 @@ const NAV_ITEMS = [
   { to: "/clock-wheels", label: "Clock Wheels" },
   { to: "/external-streams", label: "External Streams" },
   { to: "/settings/separation-rules", label: "Separation Rules" },
+  { to: "/settings/station", label: "Station Settings" },
 ];
 
 export function NavSidebar() {
+  const stationQuery = useQuery({
+    queryKey: ["public", "station"],
+    queryFn: () => apiClient.get<StationSettingsDTO>("/public/station"),
+  });
+
   return (
     <nav className="flex h-full w-56 shrink-0 flex-col gap-1 border-r border-slate-200 bg-white p-4">
-      <div className="mb-4 px-2 text-lg font-semibold text-slate-900">Spectado</div>
+      <div className="mb-4 truncate px-2 text-lg font-semibold text-slate-900">
+        {stationQuery.data?.name ?? "Spectado"}
+      </div>
       {NAV_ITEMS.map((item) => (
         <NavLink
           key={item.to}

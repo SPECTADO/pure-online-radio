@@ -104,6 +104,11 @@ export function adAudioKey(adId: string, ext: string): string {
   return `ads/${adId}/original${ext}`;
 }
 
+/** Singleton, unlike the per-item keys above -- there's only ever one station logo. */
+export function stationLogoKey(ext: string): string {
+  return `station/logo${ext}`;
+}
+
 const MIME_EXTENSIONS: Record<string, string> = {
   "audio/mpeg": ".mp3",
   "audio/mp3": ".mp3",
