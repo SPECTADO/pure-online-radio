@@ -97,13 +97,13 @@ encoder only ever receives a short-lived presigned URL.
 
 | Component | Tech | Role |
 |---|---|---|
-| `apps/api` | Express + TypeScript + Prisma | Internal API: auth, library, scheduling, clock wheels, queue resolution, NATS command publishing, encoder-facing callback |
-| `apps/encoder` | Node + TypeScript, orchestrates `ffmpeg` | Produces the live HLS stream; mixes queue/jingle/mic/relay audio; NATS command/status |
-| `apps/control-panel` | React + Vite + Tailwind | Manager UI: library, queue, schedule, clock wheels, live mic, settings |
-| `apps/player` | React + Vite + Tailwind | Public listener page: HLS playback + now-playing metadata |
+| `apps/api` | Express + TypeScript 7 + Prisma 7 | Internal API: auth, library, scheduling, clock wheels, queue resolution, NATS command publishing, encoder-facing callback |
+| `apps/encoder` | Node + TypeScript 7, orchestrates `ffmpeg` | Produces the live HLS stream; mixes queue/jingle/mic/relay audio; NATS command/status |
+| `apps/control-panel` | React 19 + Vite 8 + Tailwind | Manager UI: library, queue, schedule, clock wheels, live mic, settings |
+| `apps/player` | React 19 + Vite 8 + Tailwind | Public listener page: HLS playback + now-playing metadata |
 | `apps/webserver` | nginx | Single public entry point: static SPAs, API/HLS/NATS-ws/live-mic-ws reverse proxy |
 | `packages/shared-types` | Zod schemas | Wire contract shared by api/control-panel/encoder: DTOs + NATS subjects/payloads |
-| `packages/database` | Prisma | Schema, migrations, seed script, shared `PrismaClient` |
+| `packages/database` | Prisma 7 | Schema, migrations, seed script, driver-adapter-based `PrismaClient` singleton |
 | Postgres | — | Metadata, schedule, history, users |
 | Redis | — | Now-playing cache for the public player |
 | MinIO | S3-compatible | Song/jingle/cover-art storage (internal only; swappable for any S3-compatible provider) |
@@ -365,6 +365,31 @@ on filesystem-change events, and Docker Desktop's bind-mount file sharing doesn'
 into the container reliably. If `docker compose exec <service> cat <file>` shows your edit but the behavior hasn't
 changed, don't assume the fix is wrong — `docker compose restart <service>` first to rule out a stale process before
 debugging further.
+
+**After bumping a dependency, `api`/`encoder` crash with `Cannot find package '...'` even though it's in
+`package.json` and `pnpm install` succeeded.** Check whether the anonymous volumes for that service's `node_modules`
+(`docker-compose.override.yml`'s `- "/workspace/node_modules"` / `- "/workspace/apps/.../node_modules"`) are stale.
+Docker Compose does **not** recreate anonymous volumes just because you rebuilt the image or ran `pnpm install` on
+the host — they persist across `docker compose up`/`restart`/plain image rebuilds, silently shadowing the freshly
+built image's `node_modules` with whatever was there when the volume was first created. Force-renew them:
+`docker compose up -d --force-recreate --renew-anon-volumes <service>`. This bit us for real during the
+TypeScript 7/Prisma 7/Vite 8/React 19 upgrade — `@prisma/adapter-pg` was correctly installed and correctly present
+in the fresh image, but the running dev container still couldn't resolve it until the anon volume was renewed.
+
+**Migrating Prisma major versions (e.g. the 6→7 jump this project already made).** A few non-obvious, verified-the-
+hard-way changes if you're bumping further: (1) `datasource { url = env(...) }` in `schema.prisma` is now a hard
+validation error (`P1012`) — the connection URL lives *only* in `prisma.config.ts` (`packages/database/prisma.config.ts`)
+now. (2) That config file's `datasource.url` is evaluated for **every** Prisma command, including `generate`, which
+never needed a real connection before — reading `process.env.DATABASE_URL` directly with a placeholder fallback
+(rather than the stricter `env()` helper, which throws on a missing var) is what keeps `generate` working during
+`docker build` (no `DATABASE_URL` at build time) and plain `pnpm turbo run typecheck` on a bare host. (3) The
+`prisma-client` generator (replacing `prisma-client-js`) outputs plain, uncompiled `.ts` files to your chosen
+`output` path (e.g. `packages/database/generated/prisma/client.ts`) — no `package.json`/`exports` field, so import it
+by its actual file path (with this repo's usual `.js`-suffixed relative-import convention), not as if it were an
+installed package. (4) The generated client's *internals* still import `@prisma/client` for shared runtime helpers
+even though your own code no longer needs to — don't remove it from `package.json` just because nothing you wrote
+imports it directly. (5) A driver adapter (`@prisma/adapter-pg` here) is mandatory — `new PrismaClient()` with no
+arguments no longer works at all.
 
 **`master.m3u8` 404s.** Check `docker compose logs encoder` — the two most likely causes are the PCM FIFO not
 existing yet (created by `apps/encoder/docker/entrypoint.sh`, which only runs in the production image stage — the

@@ -1,7 +1,9 @@
 # spectado-pure-online-radio
 
 Self-hosted online radio platform (manager control panel, public player, ffmpeg-based HLS encoder, Express API,
-Postgres/Redis/MinIO/NATS) orchestrated via Docker Compose. **Read `README.md` first** — architecture, setup,
+Postgres/Redis/MinIO/NATS) orchestrated via Docker Compose. Stack: TypeScript 7, Prisma 7 (driver-adapter-based
+client, no schema-level `url`, connection config lives in `packages/database/prisma.config.ts`), Vite 8 + React 19
+for the two frontend apps. **Read `README.md` first** — architecture, setup,
 deployment, the full NATS subject contract, and a Troubleshooting section documenting every non-obvious bug already
 hit and fixed in this stack. Don't re-derive any of that from scratch; it's current and maintained. `docs/PLAN.md`
 is the original architecture plan from before any code existed — useful for *why* early structural decisions were
@@ -41,6 +43,11 @@ whenever you implement one of the stubs for real.
 - Rotating a secret in `.env` does **not** retroactively update an already-initialized Postgres/MinIO container —
   see the README's "Rotated a password..." troubleshooting entry before assuming a fresh `.env` value is live
   everywhere.
+- After bumping a dependency and rebuilding an image, if `api`/`encoder` still can't resolve the new package inside
+  the dev container, the anonymous `node_modules` volumes in `docker-compose.override.yml` are almost certainly
+  stale (they survive plain rebuilds/restarts) — `docker compose up -d --force-recreate --renew-anon-volumes
+  api encoder` before assuming the dependency itself is broken. Hit this for real during the TS7/Prisma7/Vite8/
+  React19 upgrade.
 
 ## Where things live
 
