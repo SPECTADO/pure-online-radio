@@ -97,12 +97,12 @@ encoder only ever receives a short-lived presigned URL.
 
 | Component | Tech | Role |
 |---|---|---|
-| `apps/api` | Express + TypeScript 7 + Prisma 7 | Internal API: auth, library, scheduling, clock wheels, queue resolution, NATS command publishing, encoder-facing callback |
+| `apps/api` | Express 5 + TypeScript 7 + Prisma 7 | Internal API: auth, library, scheduling, clock wheels, queue resolution, NATS command publishing, encoder-facing callback |
 | `apps/encoder` | Node + TypeScript 7, orchestrates `ffmpeg` | Produces the live HLS stream; mixes queue/jingle/mic/relay audio; NATS command/status |
-| `apps/control-panel` | React 19 + Vite 8 + Tailwind | Manager UI: library, queue, schedule, clock wheels, live mic, settings |
+| `apps/control-panel` | React 19 + React Router 7 + Vite 8 + Tailwind | Manager UI: library, queue, schedule, clock wheels, live mic, settings |
 | `apps/player` | React 19 + Vite 8 + Tailwind | Public listener page: HLS playback + now-playing metadata |
 | `apps/webserver` | nginx | Single public entry point: static SPAs, API/HLS/NATS-ws/live-mic-ws reverse proxy |
-| `packages/shared-types` | Zod schemas | Wire contract shared by api/control-panel/encoder: DTOs + NATS subjects/payloads |
+| `packages/shared-types` | Zod 4 schemas | Wire contract shared by api/control-panel/encoder: DTOs + NATS subjects/payloads |
 | `packages/database` | Prisma 7 | Schema, migrations, seed script, driver-adapter-based `PrismaClient` singleton |
 | Postgres | — | Metadata, schedule, history, users |
 | Redis | — | Now-playing cache for the public player |

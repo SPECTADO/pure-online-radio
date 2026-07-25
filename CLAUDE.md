@@ -2,8 +2,9 @@
 
 Self-hosted online radio platform (manager control panel, public player, ffmpeg-based HLS encoder, Express API,
 Postgres/Redis/MinIO/NATS) orchestrated via Docker Compose. Stack: TypeScript 7, Prisma 7 (driver-adapter-based
-client, no schema-level `url`, connection config lives in `packages/database/prisma.config.ts`), Vite 8 + React 19
-for the two frontend apps. **Read `README.md` first** — architecture, setup,
+client, no schema-level `url`, connection config lives in `packages/database/prisma.config.ts`), Express 5, Vite 8 +
+React 19 + React Router 7 for the control panel, Vite 8 + React 19 for the player, Zod 4 for the shared wire
+contract. **Read `README.md` first** — architecture, setup,
 deployment, the full NATS subject contract, and a Troubleshooting section documenting every non-obvious bug already
 hit and fixed in this stack. Don't re-derive any of that from scratch; it's current and maintained. `docs/PLAN.md`
 is the original architecture plan from before any code existed — useful for *why* early structural decisions were
