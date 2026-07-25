@@ -3,6 +3,8 @@ export * from "./dto/auth.js";
 export * from "./dto/category.js";
 export * from "./dto/song.js";
 export * from "./dto/jingle.js";
+export * from "./dto/ad.js";
+export * from "./dto/metadata-search.js";
 export * from "./dto/queue-entry.js";
 export * from "./dto/clock-wheel.js";
 export * from "./dto/separation-rule.js";

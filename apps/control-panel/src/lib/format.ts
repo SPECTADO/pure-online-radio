@@ -6,6 +6,11 @@ export function formatDuration(durationMs: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+/** "3:45 PM"-style clock time (no date) for an epoch-ms timestamp. */
+export function formatTimeOfDay(ms: number): string {
+  return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 export function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
   try {
@@ -13,4 +18,18 @@ export function formatDateTime(iso: string | null): string {
   } catch {
     return iso;
   }
+}
+
+/** ISO datetime -> the local-time value a `<input type="datetime-local">`
+ * expects ("YYYY-MM-DDTHH:mm"). */
+export function toDatetimeLocalValue(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** The reverse of toDatetimeLocalValue -- local wall-clock value -> ISO
+ * string in UTC, ready for a `z.string().datetime()` field. */
+export function fromDatetimeLocalValue(value: string): string {
+  return new Date(value).toISOString();
 }

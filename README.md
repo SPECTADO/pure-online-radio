@@ -5,9 +5,10 @@ automated ffmpeg-based encoder that produces a continuous multi-bitrate HLS stre
 queue, jingles, live mic input, and external stream relays. Everything runs as a single Docker Compose stack.
 
 > **Status:** this repository is currently a **scaffold**. The full infrastructure, data model, and service wiring
-> are real and verified working end-to-end (see [Implementation status](#implementation-status)), but most
-> station-management business logic (queue resolution, library upload, clock wheels, jingle/mic mixing) is still
-> stubbed out. See that section before assuming a feature works.
+> are real and verified working end-to-end (see [Implementation status](#implementation-status)). The manual
+> playback queue and standalone jingle overlay are now real too (real ffmpeg decode/ducking, not a simulation) —
+> most of what's left stubbed is clock wheels/scheduling, live mic mixing, and external relay switching. See that
+> section before assuming a feature works.
 
 ## Contents
 
@@ -27,12 +28,14 @@ queue, jingles, live mic input, and external stream relays. Everything runs as a
 1. **Library**: songs and jingles are uploaded (via the API) into MinIO (S3-compatible object storage), with metadata
    (title, artist, album, cover art, category/tags, duration) extracted from file tags and stored in Postgres via
    Prisma.
-2. **Queue resolution**: the encoder continuously asks the API "what's next" (`GET /internal/playback/next`) as the
-   current track nears its end. The API resolves this in priority order: a manager-scheduled one-off item due now →
-   the active **clock wheel** for the current weekday/time slot (an ordered sequence of abstract picks like "song
-   from category TOP, random" or "song from category HITS, least-often-played", each resolved to a concrete track
-   while enforcing artist/song **separation rules**) → a fallback category. The result is a signed, time-limited
-   MinIO URL the encoder can stream directly — the encoder never holds storage credentials itself.
+2. **Queue resolution**: the encoder asks the API "what's next" (`GET /internal/playback/next`) whenever it needs to
+   advance — at boot, when the current item finishes, on an explicit skip/start, or after a short retry delay while
+   the queue is empty. Today that resolves the **manual queue** only: a manager adds any song/jingle/ad to a simple
+   FIFO (search on the Queue page, or an "Add to queue" button in each library page), and items are dequeued and
+   played back-to-back in insertion order. (Clock-wheel/schedule/separation-rule resolution — automatically filling
+   the queue from rotation rules instead of manual adds — is still a stub, see below.) The result is a signed,
+   time-limited MinIO URL the encoder decodes directly via ffmpeg — it never holds storage credentials itself. When
+   the queue is empty, the encoder falls back to real silence (not a filler tone).
 3. **Encoding**: the encoder mixes whatever should currently be audible (queue track, jingle overlay, live mic
    overlay, or an external relay) into a single continuous PCM bus, which a persistent ffmpeg process encodes into
    two HLS variants (low/high bitrate AAC) written to a shared volume.
@@ -235,7 +238,8 @@ All environment variables are documented in `.env.example`. Notable ones:
 | Variable | Used by | Notes |
 |---|---|---|
 | `DATABASE_URL` | api, encoder migration tooling | Standard Prisma/Postgres connection string |
-| `S3_ENDPOINT`, `S3_BUCKET` | api | MinIO today; any S3-compatible endpoint works |
+| `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | api | MinIO today; any S3-compatible endpoint works. All four are required — the library upload routes need a real connection, unlike earlier when nothing in the API actually touched MinIO yet |
+| `MUSICBRAINZ_USER_AGENT` | api | Sent on every song metadata search request; MusicBrainz asks for a descriptive value (ideally with a contact URL) instead of an API key |
 | `API_NATS_PASSWORD` / `ENCODER_NATS_PASSWORD` / `CONTROL_PANEL_NATS_PASSWORD` | nats, api, encoder | Per-role NATS credentials; permissions enforced server-side in `infra/docker/nats/nats-server.conf.template` |
 | `ENCODER_CALLBACK_TOKEN` | api, encoder | Shared secret guarding `GET /internal/playback/next` |
 | `JWT_SECRET` | api | Signs the httpOnly access/refresh cookies issued on login |
@@ -266,17 +270,41 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
 - Login (JWT httpOnly cookies), `/auth/me`, NATS-ws credential broker.
 - NATS command publishing from the queue skip/start/mode-set endpoints, with audit logging.
 - The encoder's full audio pipeline: PCM FIFO → real multi-bitrate ffmpeg HLS encode, continuously producing a
-  playable stream (currently a filler tone, since real queue playback isn't implemented yet — see below).
-- NATS command/status plumbing, heartbeat, and the encoder's `GET /internal/playback/next` polling loop.
+  playable stream — the manual queue's songs/jingles/ads and the standalone jingle overlay are genuinely decoded
+  (ffmpeg spawned per item, `-re` real-time-paced, ring-buffered) and mixed onto the bus, not simulated; the encoder
+  falls back to real silence (not a filler tone) once the queue is empty.
+- **Manual playback queue**: `GET/POST /queue`, `POST/DELETE /queue/items/:id` back a real FIFO (backed by
+  `ScheduledItem` with `scheduledFor: null`) that the encoder drains one item after another
+  (`apps/encoder/src/controllers/queueController.ts`); `POST /queue/jingle/play|stop` mount/unmount a standalone
+  jingle overlay that ducks the primary bus in real time (`core/mixer.ts`'s envelope-driven ducking, one
+  `GainEnvelope` drives both the jingle's own fade and the primary bus's duck amount) — independent of what's
+  currently in the queue. The control panel's Queue page (search + add + remove) and Dashboard (now-playing +
+  up-next + jingle search/play/stop, each with a live mm:ss countdown and progress bar, poll + NATS-pushed) are both
+  wired to this for real.
+- NATS command/status plumbing, heartbeat (now reporting the mixer's real primary-slot kind/jingle-active/underrun
+  state instead of hardcoded placeholders), and the encoder's on-demand `GET /internal/playback/next` fetch (driven
+  by the queue controller's advance loop, not a fixed-interval poll — that endpoint has a real dequeue side effect).
 - Public now-playing endpoint (Redis-cached) and the player's HLS playback + polling.
+- **Songs/jingles/ads library** — full upload/edit/delete for all three media kinds, each in its own MinIO
+  key prefix (`songs/{id}/`, `jingles/{id}/`, `ads/{id}/`). ID3 tag extraction (`music-metadata`) auto-fills
+  title/artist/album/duration on upload, editable afterward; embedded ID3 cover art is auto-extracted, or a
+  cover image can be uploaded/replaced separately. Categories are user-defined and many-to-many (a song/jingle
+  can belong to several); every song and jingle is always additionally attached to the fixed "ALL" category,
+  and ads are *only* ever attached to "ALL" (no user choice — see `ads.routes.ts`). Ads additionally carry a
+  mandatory `activeFrom`/`activeUntil` window in the schema, enforced by request validation, though nothing
+  downstream (queue resolution, below) reads it yet since that's still a stub. Song metadata can also be
+  looked up externally via MusicBrainz + the Cover Art Archive (free, no API key) and applied with one click —
+  see `apps/api/src/modules/library/metadataProviders/musicBrainzProvider.ts` for why that provider was picked
+  and what's deliberately not built (audio-fingerprint auto-identification via AcoustID/Chromaprint).
 
 **Stubbed (real routes/modules exist, but return placeholder data or `501 Not Implemented`):**
-- Library upload (file streaming to MinIO, tag extraction) — reads are real, writes are not.
-- Queue resolution algorithm (one-off schedule → clock wheel → separation rules → fallback) — currently always
-  returns a "silence, queue empty" directive.
+- Automatic queue resolution from rotation rules (time-scheduled one-off items → clock wheel → separation rules →
+  fallback category) — the manual queue above is real, but nothing yet auto-*fills* it from a clock wheel or
+  enforces separation rules; an ad's `activeFrom`/`activeUntil` window is likewise only enforced at upload/edit
+  time, not when adding to the queue.
 - Clock wheels, scheduling, external streams CRUD.
-- Jingle playback, live mic mixing, external relay switching in the encoder — correct interfaces/state machines
-  exist, but don't yet act on the NATS commands they receive.
+- Live mic mixing, external relay switching in the encoder — correct interfaces/state machines exist, but don't yet
+  act on the NATS commands they receive (jingle playback, above, is the one overlay that's real now).
 
 ## Troubleshooting
 

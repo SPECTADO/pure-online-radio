@@ -2,25 +2,34 @@ import {
   NATS_SUBJECTS,
   HeartbeatStatusSchema,
   ErrorStatusSchema,
+  NowPlayingStatusSchema,
+  QueueAdvancedStatusSchema,
+  JingleStartedStatusSchema,
+  JingleEndedStatusSchema,
   type HeartbeatStatus,
   type ErrorStatus,
+  type NowPlayingStatus,
+  type QueueAdvancedStatus,
+  type JingleStartedStatus,
+  type JingleEndedStatus,
 } from "@spectado/shared-types";
 import type { NatsClient } from "./natsClient.js";
 import type { HealthMonitor } from "../health/healthMonitor.js";
+import type { Mixer } from "../core/mixer.js";
 import type { Logger } from "../util/logger.js";
 
 /**
- * REAL: publishes HeartbeatStatus/ErrorStatus, validated against the
- * shared-types schemas, over NATS. `activeSlots.primary` is hardcoded to
- * "filler" and `mixerUnderruns` to 0 for this pass, per spec - there is
- * nothing else playing yet and the mixer's real underrun counter isn't wired
- * through here (see core/mixer.ts Mixer.underrunCount for where that value
- * actually lives once this is worth reporting accurately).
+ * REAL: publishes every encoder status message, validated against the
+ * shared-types schemas, over NATS. The heartbeat's `activeSlots`/
+ * `mixerUnderruns` reflect the mixer's actual live state (primarySlotKind /
+ * jingleActive / underrunCount) rather than the original pass's hardcoded
+ * "filler"/0 placeholders, now that the mixer really swaps sources.
  */
 export class StatusPublisher {
   constructor(
     private readonly natsClient: NatsClient,
     private readonly healthMonitor: HealthMonitor,
+    private readonly mixer: Mixer,
     private readonly logger: Logger,
   ) {}
 
@@ -29,11 +38,11 @@ export class StatusPublisher {
       ts: new Date().toISOString(),
       uptimeSec: this.healthMonitor.uptimeSec(),
       activeSlots: {
-        primary: "filler",
-        jingle: false,
+        primary: this.mixer.primarySlotKind,
+        jingle: this.mixer.jingleActive,
         mic: false,
       },
-      mixerUnderruns: 0,
+      mixerUnderruns: this.mixer.underrunCount,
       hlsWriterHealthy: this.healthMonitor.isMasterEncoderHealthy(),
     };
     const validated = HeartbeatStatusSchema.parse(status);
@@ -52,6 +61,30 @@ export class StatusPublisher {
     const validated = ErrorStatusSchema.parse(status);
     this.natsClient.publish(NATS_SUBJECTS.encoderStatus.error, validated);
     this.logger.warn({ status: validated }, "published error status");
+  }
+
+  publishNowPlaying(status: NowPlayingStatus): void {
+    const validated = NowPlayingStatusSchema.parse(status);
+    this.natsClient.publish(NATS_SUBJECTS.encoderStatus.nowPlaying, validated);
+    this.logger.debug({ status: validated }, "published now playing");
+  }
+
+  publishQueueAdvanced(status: QueueAdvancedStatus): void {
+    const validated = QueueAdvancedStatusSchema.parse(status);
+    this.natsClient.publish(NATS_SUBJECTS.encoderStatus.queueAdvanced, validated);
+    this.logger.debug({ status: validated }, "published queue advanced");
+  }
+
+  publishJingleStarted(status: JingleStartedStatus): void {
+    const validated = JingleStartedStatusSchema.parse(status);
+    this.natsClient.publish(NATS_SUBJECTS.encoderStatus.jingleStarted, validated);
+    this.logger.debug({ status: validated }, "published jingle started");
+  }
+
+  publishJingleEnded(status: JingleEndedStatus): void {
+    const validated = JingleEndedStatusSchema.parse(status);
+    this.natsClient.publish(NATS_SUBJECTS.encoderStatus.jingleEnded, validated);
+    this.logger.debug({ status: validated }, "published jingle ended");
   }
 
   /** Starts the heartbeat interval and returns the timer so callers can clear it on shutdown. */

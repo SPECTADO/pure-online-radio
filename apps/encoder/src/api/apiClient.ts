@@ -3,19 +3,21 @@ import type { EncoderConfig } from "../config.js";
 import type { Logger } from "../util/logger.js";
 
 /**
- * REAL: polls `${API_CALLBACK_URL}/playback/next` on an interval, purely to
- * prove connectivity/shape for this pass - nothing consumes the returned
- * directive yet (that's queueController's job once it's real). The API is
- * expected to almost always return `{type:"silence", ...}` right now, and
- * that is treated as a perfectly normal result, not an error.
+ * REAL: fetches `${API_CALLBACK_URL}/playback/next` on demand.
+ *
+ * IMPORTANT: this endpoint has a real side effect -- it atomically dequeues
+ * the head of the manual queue server-side (see api's internal.routes.ts).
+ * `fetchNextDirective()` must therefore only ever be called by
+ * queueController's own advance-driven schedule (boot, track-ended, explicit
+ * AdvanceCommand, or a silence directive's retryAfterMs). A second caller
+ * polling on a fixed interval alongside that would double-claim/skip queue
+ * items unpredictably -- this class deliberately has no interval of its own.
  *
  * Must never crash the process: network errors, timeouts, non-2xx statuses,
- * and schema validation failures are all logged and swallowed, and the next
- * poll just tries again.
+ * and schema validation failures are all logged and swallowed, returning
+ * `null` so the caller can decide how to retry.
  */
 export class ApiClient {
-  private timer: NodeJS.Timeout | null = null;
-
   constructor(
     private readonly config: EncoderConfig,
     private readonly logger: Logger,
@@ -54,22 +56,6 @@ export class ApiClient {
       return null;
     } finally {
       clearTimeout(timeoutHandle);
-    }
-  }
-
-  startPolling(intervalMs: number = this.config.apiPollIntervalMs): void {
-    if (this.timer) return;
-    const tick = (): void => {
-      void this.fetchNextDirective();
-    };
-    tick();
-    this.timer = setInterval(tick, intervalMs);
-  }
-
-  stopPolling(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
     }
   }
 }

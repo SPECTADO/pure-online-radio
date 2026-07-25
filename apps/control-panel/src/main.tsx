@@ -1,18 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
 import { useAuthStore } from "./lib/authStore";
+import { queryClient } from "./lib/queryClient";
 import "./index.css";
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-    },
-  },
-});
 
 // Kick off the session check immediately so ProtectedRoute doesn't have to
 // wait for a component to mount before it knows whether we're logged in.

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { NowPlayingDTO } from "@spectado/shared-types";
-import { apiClient } from "./lib/apiClient";
+import { apiClient, apiUrl } from "./lib/apiClient";
 import { AlbumArt } from "./components/AlbumArt";
 import { TrackInfo } from "./components/TrackInfo";
 import { PlayerControls } from "./components/PlayerControls";
@@ -54,7 +54,7 @@ export function App() {
       <AudioElement playing={playing} muted={muted} onError={setStreamError} />
 
       <AlbumArt
-        coverArtUrl={nowPlayingQuery.data?.coverArtUrl ?? null}
+        coverArtUrl={nowPlayingQuery.data?.coverArtUrl ? apiUrl(nowPlayingQuery.data.coverArtUrl) : null}
         alt={nowPlayingQuery.data?.title ?? "Album art"}
       />
 

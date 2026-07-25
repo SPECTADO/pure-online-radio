@@ -1,25 +1,62 @@
 import type { JinglePlayCommand, JingleStopCommand } from "@spectado/shared-types";
+import type { Mixer } from "../core/mixer.js";
+import type { StatusPublisher } from "../nats/statusPublisher.js";
 import type { Logger } from "../util/logger.js";
+import { JingleSource } from "../sources/jingleSource.js";
 
 /**
- * STUB - not implemented in this pass. commandRouter.ts currently just logs
- * and acks every command itself; nothing calls into this controller yet.
- *
- * TODO (full design): on JinglePlayCommand, construct a sources/jingleSource.ts
- * from the command, mount it as the "jingle" overlay Slot (core/types.ts),
- * apply its ducking GainEnvelope to the primary bus, and publish
- * jingleStarted/jingleEnded status as it plays/finishes. On
- * JingleStopCommand, tear the overlay down early (with a fast fade-out
- * rather than a hard cut).
+ * REAL: mounts/unmounts the jingle overlay `Slot` (core/mixer.ts) driven off
+ * NATS commands, independent of the queue's primary-slot playback. Publishes
+ * jingleStarted/jingleEnded status so the control panel can show a
+ * countdown for the standalone jingle alongside whatever the queue is
+ * currently playing.
  */
 export class JingleController {
-  constructor(private readonly logger: Logger) {}
+  private current: { source: JingleSource; jingleId: string } | null = null;
+
+  constructor(
+    private readonly mixer: Mixer,
+    private readonly statusPublisher: StatusPublisher,
+    private readonly logger: Logger,
+  ) {}
 
   async handleJinglePlay(command: JinglePlayCommand): Promise<void> {
-    this.logger.warn({ command }, "JingleController.handleJinglePlay not implemented - TODO: mount jingle overlay with ducking envelope");
+    this.teardownCurrent();
+
+    const source = new JingleSource(command, this.logger);
+    source.once("ended", () => {
+      if (this.current?.source === source) {
+        this.current = null;
+        this.mixer.clearJingleSource();
+        this.statusPublisher.publishJingleEnded({ ts: new Date().toISOString(), jingleId: command.jingleId });
+      }
+    });
+
+    this.current = { source, jingleId: command.jingleId };
+    this.mixer.setJingleSource(source, source.buildGainEnvelope(), command.duckDb);
+    this.logger.info({ jingleId: command.jingleId }, "jingle overlay mounted");
+
+    this.statusPublisher.publishJingleStarted({
+      ts: new Date().toISOString(),
+      jingleId: command.jingleId,
+      title: command.title,
+      durationMs: command.durationMs,
+    });
   }
 
-  async handleJingleStop(command: JingleStopCommand): Promise<void> {
-    this.logger.warn({ command }, "JingleController.handleJingleStop not implemented - TODO: fade out and unmount jingle overlay");
+  async handleJingleStop(_command: JingleStopCommand): Promise<void> {
+    if (!this.current) return;
+    const { jingleId } = this.current;
+    this.teardownCurrent();
+    this.mixer.clearJingleSource();
+    this.statusPublisher.publishJingleEnded({ ts: new Date().toISOString(), jingleId });
+  }
+
+  private teardownCurrent(): void {
+    if (this.current) {
+      this.current.source.removeAllListeners("ended");
+      this.current.source.destroy();
+      this.current = null;
+    }
   }
 }

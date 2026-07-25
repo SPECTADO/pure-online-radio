@@ -15,6 +15,8 @@ import {
 } from "@spectado/shared-types";
 import type { z } from "zod";
 import type { NatsClient } from "./natsClient.js";
+import type { QueueController } from "../controllers/queueController.js";
+import type { JingleController } from "../controllers/jingleController.js";
 import type { Logger } from "../util/logger.js";
 
 interface CommandEntry {
@@ -39,15 +41,20 @@ const COMMAND_SCHEMAS: Record<string, CommandEntry> = {
   [NATS_SUBJECTS.cmd.relayCancel]: { name: "relay.cancel", schema: RelayCancelCommandSchema },
 };
 
+export interface CommandControllers {
+  queueController: QueueController;
+  jingleController: JingleController;
+}
+
 /**
  * REAL: subscribes to every `radio.encoder.cmd.*` subject (via
  * NATS_WILDCARDS.cmd), validates each payload against its matching schema,
- * logs receipt, and always acks on NATS_SUBJECTS.encoderStatus.commandAck -
- * but does NOT dispatch to the stub controllers with real behavior yet.
- * That wiring (queueController.handleAdvance, jingleController.handlePlay,
- * etc.) is a TODO for the pass that makes those controllers real.
+ * and dispatches `advance`/`setMode`/`jingle.play`/`jingle.stop` to the real
+ * queueController/jingleController. `live.*`/`relay.*` keep the original
+ * pass's behavior (validate + ack `true`, no dispatch) -- those features are
+ * untouched, out of scope here.
  */
-export function startCommandRouter(natsClient: NatsClient, logger: Logger): void {
+export function startCommandRouter(natsClient: NatsClient, logger: Logger, controllers: CommandControllers): void {
   natsClient.subscribe(NATS_WILDCARDS.cmd, (subject, data) => {
     const entry = COMMAND_SCHEMAS[subject];
     if (!entry) {
@@ -66,15 +73,36 @@ export function startCommandRouter(natsClient: NatsClient, logger: Logger): void
     }
 
     const commandId = extractCommandId(parsed.data);
-    logger.info({ subject, command: entry.name, commandId, payload: parsed.data }, `received cmd ${entry.name}, not yet actioned`);
+    logger.info({ subject, command: entry.name, commandId, payload: parsed.data }, `received cmd ${entry.name}`);
 
-    // TODO: dispatch to queueController / jingleController / liveMicController /
-    // relayController here once they have real behavior instead of logging.
+    void dispatch(subject, parsed.data, controllers).catch((err: unknown) => {
+      logger.error({ err, subject, command: entry.name }, "command handler threw");
+    });
 
     publishAck(natsClient, logger, { commandId: commandId ?? "unknown", ok: true, error: null });
   });
 
   logger.info({ subject: NATS_WILDCARDS.cmd }, "command router subscribed");
+}
+
+async function dispatch(subject: string, data: unknown, controllers: CommandControllers): Promise<void> {
+  switch (subject) {
+    case NATS_SUBJECTS.cmd.advance:
+      await controllers.queueController.handleAdvance(data as z.infer<typeof AdvanceCommandSchema>);
+      return;
+    case NATS_SUBJECTS.cmd.setMode:
+      await controllers.queueController.handleSetMode(data as z.infer<typeof SetModeCommandSchema>);
+      return;
+    case NATS_SUBJECTS.cmd.jinglePlay:
+      await controllers.jingleController.handleJinglePlay(data as z.infer<typeof JinglePlayCommandSchema>);
+      return;
+    case NATS_SUBJECTS.cmd.jingleStop:
+      await controllers.jingleController.handleJingleStop(data as z.infer<typeof JingleStopCommandSchema>);
+      return;
+    default:
+      // live.*/relay.*: untouched stubs, no dispatch -- already ack'd above.
+      return;
+  }
 }
 
 function extractCommandId(data: unknown): string | null {

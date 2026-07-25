@@ -6,7 +6,12 @@ export const QueueEntrySchema = z.object({
   id: z.string(),
   mediaKind: MediaKindSchema,
   mediaId: z.string(),
-  scheduledFor: z.string().datetime().nullable(), // null = "as soon as due"
+  // Denormalized for display so the queue/dashboard UI never has to N+1 back
+  // to the library for a title -- artist is null for jingles/ads (neither has one).
+  title: z.string(),
+  artist: z.string().nullable(),
+  durationMs: z.number().int().positive(),
+  scheduledFor: z.string().datetime().nullable(), // null = "as soon as due" (the manual queue)
   status: ScheduledItemStatusSchema,
   addedAt: z.string().datetime(),
 });

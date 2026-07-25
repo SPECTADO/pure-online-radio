@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { Outlet } from "react-router-dom";
 import { NavSidebar } from "./NavSidebar";
 import { TopBar } from "./TopBar";
+import { ToastContainer } from "./ToastContainer";
+import { UploadQueueTray } from "./UploadQueueTray";
 import { natsClient } from "../lib/natsClient";
 
 export function AppShell() {
@@ -20,6 +22,8 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      <ToastContainer />
+      <UploadQueueTray />
     </div>
   );
 }

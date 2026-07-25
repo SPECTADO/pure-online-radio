@@ -11,6 +11,13 @@ export class ApiError extends Error {
   }
 }
 
+/** Resolves an API-relative path (e.g. a DTO field like coverArtUrl) against
+ * the configured API base -- for use directly as an <img src>, where
+ * apiClient.get()'s JSON handling doesn't apply. */
+export function apiUrl(path: string): string {
+  return `${getConfig().apiBaseUrl}${path}`;
+}
+
 export const apiClient = {
   async get<T>(path: string): Promise<T> {
     const { apiBaseUrl } = getConfig();

@@ -10,6 +10,8 @@ import { authRoutes } from "./modules/auth/auth.routes.js";
 import { clockWheelsRoutes } from "./modules/clockWheels/clockWheels.routes.js";
 import { externalStreamsRoutes } from "./modules/externalStreams/externalStreams.routes.js";
 import { internalRoutes } from "./modules/internal/internal.routes.js";
+import { adsRoutes } from "./modules/library/ads.routes.js";
+import { categoriesRoutes } from "./modules/library/categories.routes.js";
 import { jinglesRoutes } from "./modules/library/jingles.routes.js";
 import { songsRoutes } from "./modules/library/songs.routes.js";
 import { liveMicRoutes } from "./modules/liveMic/liveMic.routes.js";
@@ -61,8 +63,10 @@ export function createApp(): Express {
 
   app.use("/auth", authRoutes);
   app.use("/realtime", realtimeRoutes);
+  app.use("/library/categories", categoriesRoutes);
   app.use("/library/songs", songsRoutes);
   app.use("/library/jingles", jinglesRoutes);
+  app.use("/library/ads", adsRoutes);
   app.use("/queue", queueRoutes);
   app.use("/schedule", scheduleRoutes);
   app.use("/clock-wheels", clockWheelsRoutes);

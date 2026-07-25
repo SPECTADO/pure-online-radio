@@ -22,6 +22,8 @@ export type SetModeCommand = z.infer<typeof SetModeCommandSchema>;
 export const JinglePlayCommandSchema = z.object({
   commandId: z.string(),
   jingleId: z.string(),
+  title: z.string(),
+  durationMs: z.number().int().positive(),
   url: z.string().url(),
   duckDb: z.number().default(-14),
   fadeInMs: z.number().int().nonnegative().default(300),
@@ -90,6 +92,20 @@ export const QueueAdvancedStatusSchema = z.object({
   reason: z.enum(["auto", "manual-start", "skip"]),
 });
 export type QueueAdvancedStatus = z.infer<typeof QueueAdvancedStatusSchema>;
+
+export const JingleStartedStatusSchema = z.object({
+  ts: z.string().datetime(),
+  jingleId: z.string(),
+  title: z.string(),
+  durationMs: z.number().int().positive(),
+});
+export type JingleStartedStatus = z.infer<typeof JingleStartedStatusSchema>;
+
+export const JingleEndedStatusSchema = z.object({
+  ts: z.string().datetime(),
+  jingleId: z.string(),
+});
+export type JingleEndedStatus = z.infer<typeof JingleEndedStatusSchema>;
 
 export const ErrorStatusSchema = z.object({
   ts: z.string().datetime(),

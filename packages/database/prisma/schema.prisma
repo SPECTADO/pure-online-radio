@@ -18,6 +18,7 @@ enum Role {
 enum MediaKind {
   SONG
   JINGLE
+  AD
 }
 
 enum SelectionStrategy {
@@ -83,6 +84,7 @@ model User {
 
   createdSongs           Song[]                @relation("SongCreatedBy")
   createdJingles         Jingle[]               @relation("JingleCreatedBy")
+  createdAds             Ad[]                  @relation("AdCreatedBy")
   createdScheduledItems  ScheduledItem[]
   createdExternalStreams ExternalStream[]
   updatedSeparationRules SeparationRule[]
@@ -93,10 +95,12 @@ model User {
 
 model Category {
   id        String   @id @default(cuid())
-  name      String   @unique // "TOP", "HITS", "all", ...
+  name      String   @unique // "ALL", "TOP", "HITS", ...
   createdAt DateTime @default(now())
 
   songs           Song[]
+  jingles         Jingle[]
+  ads             Ad[]
   clockWheelSteps ClockWheelStep[]
 }
 
@@ -110,8 +114,7 @@ model Song {
   fileMimeType  String
   fileSizeBytes Int
   coverArtKey   String? // MinIO object key for extracted/uploaded cover art
-  categoryId    String?
-  category      Category? @relation(fields: [categoryId], references: [id])
+  categories    Category[] // user-defined; every song is also always attached to "ALL"
   tags          String[]  @default([])
   isActive      Boolean   @default(true) // soft-disable, keeps history FKs intact
   stationId     String? // multi-station scaffold, unused in v1
@@ -123,7 +126,6 @@ model Song {
   scheduledItems  ScheduledItem[]
   playbackHistory PlaybackHistoryEntry[]
 
-  @@index([categoryId])
   @@index([artist])
 }
 
@@ -136,6 +138,7 @@ model Jingle {
   fileKey       String     @unique
   fileMimeType  String
   fileSizeBytes Int
+  categories    Category[] // user-defined; every jingle is also always attached to "ALL"
   isActive      Boolean    @default(true)
   stationId     String?
   createdById   String?
@@ -149,17 +152,52 @@ model Jingle {
   @@index([type])
 }
 
+// ── Ads ───────────────────────────────────────────────────────────────────
+// A third media kind alongside songs/jingles: no user-facing categories (the
+// app layer only ever attaches the single "ALL" category, so ad selection can
+// reuse the same category-scoped queries as songs/jingles later without a
+// special case) but a mandatory datetime active window -- queue resolution
+// (still a TODO stub elsewhere in this codebase) must exclude any Ad outside
+// [activeFrom, activeUntil] rather than ever falling back to "always eligible".
+
+model Ad {
+  id            String     @id @default(cuid())
+  title         String
+  durationMs    Int
+  fileKey       String     @unique
+  fileMimeType  String
+  fileSizeBytes Int
+  activeFrom    DateTime
+  activeUntil   DateTime
+  categories    Category[] // app layer restricts this to "ALL" only -- see ads.routes.ts
+  isActive      Boolean    @default(true)
+  stationId     String?
+  createdById   String?
+  createdBy     User?      @relation("AdCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  scheduledItems ScheduledItem[]
+
+  @@index([activeFrom, activeUntil])
+}
+
 // ── One-off scheduled items ──────────────────────────────────────────────
 
 model ScheduledItem {
   id           String              @id @default(cuid())
-  scheduledFor DateTime
-  position     Int                 @default(0) // ordering when several items share a timestamp
+  // null = a manually-queued item ("play as soon as due" -- the FIFO manual
+  // queue orders these by `position`); non-null = a time-scheduled one-off
+  // item (the not-yet-built Schedule feature).
+  scheduledFor DateTime?
+  position     Int                 @default(0) // ordering when several items share a timestamp (or are all unscheduled)
   mediaKind    MediaKind
   songId       String?
   song         Song?               @relation(fields: [songId], references: [id])
   jingleId     String?
   jingle       Jingle?             @relation(fields: [jingleId], references: [id])
+  adId         String?
+  ad           Ad?                 @relation(fields: [adId], references: [id])
   status       ScheduledItemStatus @default(PENDING)
   stationId    String?
   createdById  String
@@ -170,7 +208,7 @@ model ScheduledItem {
   playbackHistory PlaybackHistoryEntry[]
 
   @@index([scheduledFor, status])
-  // NOTE: Prisma cannot express "exactly one of songId/jingleId set, matching mediaKind"
+  // NOTE: Prisma cannot express "exactly one of songId/jingleId/adId set, matching mediaKind"
   // as a schema-level constraint. Enforce in the application layer (zod) and optionally
   // add a hand-written CHECK constraint via a raw-SQL migration.
 }

@@ -47,3 +47,16 @@ export class PcmFramer {
     this.buffered = Buffer.alloc(0);
   }
 }
+
+/**
+ * Copies a frame Buffer into a freshly-allocated, guaranteed-aligned
+ * ArrayBuffer rather than viewing the Buffer's own backing store directly --
+ * Node's internal Buffer pool doesn't guarantee 4-byte-aligned offsets, and
+ * Float32Array construction throws if the offset isn't a multiple of 4. The
+ * copy is a few KB per frame, negligible next to the ffmpeg decode itself.
+ */
+export function bufferToFloat32Frame(frame: Buffer): Float32Array {
+  const arrayBuffer = new ArrayBuffer(frame.byteLength);
+  Buffer.from(arrayBuffer).set(frame);
+  return new Float32Array(arrayBuffer);
+}

@@ -17,7 +17,6 @@ const EnvSchema = z.object({
   // --- API callback (GET /internal/playback/next) ---
   API_CALLBACK_URL: z.string().url().default("http://api:3000/internal"),
   API_CALLBACK_TOKEN: z.string().min(1, "API_CALLBACK_TOKEN is required"),
-  API_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(10_000),
   API_TIMEOUT_MS: z.coerce.number().int().positive().default(3_000),
 
   // --- HLS output ---
@@ -41,7 +40,6 @@ export interface EncoderConfig {
   natsPassword: string;
   apiCallbackUrl: string;
   apiCallbackToken: string;
-  apiPollIntervalMs: number;
   apiTimeoutMs: number;
   hlsOutputDir: string;
   pcmFifoPath: string;
@@ -69,7 +67,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EncoderConfig 
     natsPassword: data.NATS_PASSWORD,
     apiCallbackUrl: data.API_CALLBACK_URL,
     apiCallbackToken: data.API_CALLBACK_TOKEN,
-    apiPollIntervalMs: data.API_POLL_INTERVAL_MS,
     apiTimeoutMs: data.API_TIMEOUT_MS,
     hlsOutputDir: data.HLS_OUTPUT_DIR,
     pcmFifoPath: data.PCM_FIFO_PATH,

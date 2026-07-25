@@ -1,30 +1,156 @@
 import { Router } from "express";
 import { z } from "zod";
-import { PlaybackModeSchema } from "@spectado/shared-types";
+import { Prisma, prisma } from "@spectado/database";
+import {
+  CreateQueueEntryRequestSchema,
+  PlaybackModeSchema,
+  QueueEntrySchema,
+  type MediaKind,
+  type QueueEntryDTO,
+} from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
-import { notImplemented } from "../../lib/notImplemented.js";
-import { publishAdvanceCommand, publishSetModeCommand } from "../../nats/publishers.js";
+import {
+  publishAdvanceCommand,
+  publishJinglePlayCommand,
+  publishJingleStopCommand,
+  publishQueueUpdated,
+  publishSetModeCommand,
+} from "../../nats/publishers.js";
 
 export const queueRoutes = Router();
 
 queueRoutes.use(requireAuth, requireRole("MANAGER", "ADMIN"));
 
-queueRoutes.get(
-  "/",
-  notImplemented("resolve the current queue: due one-off items + active clock wheel lookahead"),
-);
+const queueEntryInclude = {
+  song: true,
+  jingle: true,
+  ad: true,
+} satisfies Prisma.ScheduledItemInclude;
 
-queueRoutes.post(
-  "/items",
-  notImplemented("validate CreateQueueEntryRequestDTO and create a ScheduledItem row"),
-);
+type QueueEntryWithIncludes = Prisma.ScheduledItemGetPayload<{ include: typeof queueEntryInclude }>;
 
-queueRoutes.delete("/items/:id", notImplemented("cancel a pending ScheduledItem"));
+function toQueueEntryDTO(item: QueueEntryWithIncludes): QueueEntryDTO {
+  const media = item.song ?? item.jingle ?? item.ad;
+  if (!media) {
+    throw new Error(`ScheduledItem ${item.id} has no song/jingle/ad attached`);
+  }
+  return {
+    id: item.id,
+    mediaKind: item.mediaKind,
+    mediaId: item.songId ?? item.jingleId ?? item.adId ?? "",
+    title: media.title,
+    artist: item.song?.artist ?? null,
+    durationMs: media.durationMs,
+    scheduledFor: item.scheduledFor?.toISOString() ?? null,
+    status: item.status,
+    addedAt: item.createdAt.toISOString(),
+  };
+}
 
-queueRoutes.patch(
-  "/items/reorder",
-  notImplemented("reorder same-timestamp ScheduledItem.position values"),
-);
+// Manual queue: only PENDING, unscheduled (scheduledFor: null) items, FIFO by
+// `position`. Time-scheduled items (the not-yet-built Schedule feature) would
+// have a non-null scheduledFor and are deliberately excluded here.
+queueRoutes.get("/", async (_req, res) => {
+  const items = await prisma.scheduledItem.findMany({
+    where: { status: "PENDING", scheduledFor: null },
+    include: queueEntryInclude,
+    orderBy: { position: "asc" },
+  });
+  res.json(items.map((item) => QueueEntrySchema.parse(toQueueEntryDTO(item))));
+});
+
+async function findActiveMedia(mediaKind: MediaKind, mediaId: string) {
+  if (mediaKind === "SONG") return prisma.song.findUnique({ where: { id: mediaId } });
+  if (mediaKind === "JINGLE") return prisma.jingle.findUnique({ where: { id: mediaId } });
+  return prisma.ad.findUnique({ where: { id: mediaId } });
+}
+
+queueRoutes.post("/items", async (req, res) => {
+  const parsed = CreateQueueEntryRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid request", details: parsed.error.issues });
+    return;
+  }
+
+  const { mediaKind, mediaId } = parsed.data;
+  const media = await findActiveMedia(mediaKind, mediaId);
+  if (!media) {
+    res.status(404).json({ error: `${mediaKind.toLowerCase()} not found` });
+    return;
+  }
+  if (!media.isActive) {
+    res.status(400).json({ error: `${mediaKind.toLowerCase()} is not active` });
+    return;
+  }
+
+  const { _max } = await prisma.scheduledItem.aggregate({
+    where: { status: "PENDING", scheduledFor: null },
+    _max: { position: true },
+  });
+  const position = (_max.position ?? 0) + 1;
+
+  const item = await prisma.scheduledItem.create({
+    data: {
+      scheduledFor: null,
+      position,
+      mediaKind,
+      songId: mediaKind === "SONG" ? mediaId : undefined,
+      jingleId: mediaKind === "JINGLE" ? mediaId : undefined,
+      adId: mediaKind === "AD" ? mediaId : undefined,
+      status: "PENDING",
+      createdById: req.user!.id,
+    },
+    include: queueEntryInclude,
+  });
+
+  await publishQueueUpdated("item-added");
+  res.status(201).json(QueueEntrySchema.parse(toQueueEntryDTO(item)));
+});
+
+queueRoutes.delete("/items/:id", async (req, res) => {
+  const existing = await prisma.scheduledItem.findUnique({ where: { id: req.params.id } });
+  if (!existing || existing.status !== "PENDING") {
+    res.status(404).json({ error: "queue item not found" });
+    return;
+  }
+
+  await prisma.scheduledItem.delete({ where: { id: existing.id } });
+  await publishQueueUpdated("item-removed");
+  res.status(204).send();
+});
+
+const ReorderQueueRequestSchema = z.object({ orderedIds: z.array(z.string()).min(1) });
+
+// Body is the full new ordering (every currently-PENDING item's id, in the
+// desired order) rather than a from/to index pair -- simpler to reason
+// about, atomic, and works unchanged for a future drag-and-drop UI in
+// addition to today's move-up/move-down buttons.
+queueRoutes.patch("/items/reorder", async (req, res) => {
+  const parsed = ReorderQueueRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid request body", issues: parsed.error.issues });
+    return;
+  }
+
+  const pending = await prisma.scheduledItem.findMany({
+    where: { status: "PENDING", scheduledFor: null },
+    select: { id: true },
+  });
+  const pendingIds = new Set(pending.map((p) => p.id));
+  const { orderedIds } = parsed.data;
+
+  if (orderedIds.length !== pendingIds.size || !orderedIds.every((id) => pendingIds.has(id))) {
+    res.status(400).json({ error: "orderedIds must contain exactly the current pending queue items" });
+    return;
+  }
+
+  await prisma.$transaction(
+    orderedIds.map((id, index) => prisma.scheduledItem.update({ where: { id }, data: { position: index + 1 } })),
+  );
+
+  await publishQueueUpdated("reordered");
+  res.status(204).send();
+});
 
 // --- these publish real NATS commands + write CommandAuditLog rows, proving the
 // command-publish path end-to-end even though queue resolution logic isn't built yet ---
@@ -69,6 +195,48 @@ queueRoutes.post("/mode", async (req, res, next) => {
       mode: parsed.data.mode,
       userId: req.user?.id ?? null,
     });
+    res.json({ ok: true, commandId: command.commandId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// --- standalone jingle overlay: independent of the queue, ducks over whatever
+// the primary bus is currently playing ---
+
+const PlayJingleRequestSchema = z.object({ jingleId: z.string() });
+
+queueRoutes.post("/jingle/play", async (req, res, next) => {
+  const parsed = PlayJingleRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid request body", issues: parsed.error.issues });
+    return;
+  }
+
+  const jingle = await prisma.jingle.findUnique({ where: { id: parsed.data.jingleId } });
+  if (!jingle) {
+    res.status(404).json({ error: "jingle not found" });
+    return;
+  }
+  if (!jingle.isActive) {
+    res.status(400).json({ error: "jingle is not active" });
+    return;
+  }
+
+  try {
+    const command = await publishJinglePlayCommand({
+      jingle,
+      userId: req.user?.id ?? null,
+    });
+    res.json({ ok: true, commandId: command.commandId });
+  } catch (err) {
+    next(err);
+  }
+});
+
+queueRoutes.post("/jingle/stop", async (req, res, next) => {
+  try {
+    const command = await publishJingleStopCommand({ userId: req.user?.id ?? null });
     res.json({ ok: true, commandId: command.commandId });
   } catch (err) {
     next(err);

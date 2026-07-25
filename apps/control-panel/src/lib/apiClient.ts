@@ -26,16 +26,26 @@ export class ApiError extends Error {
   }
 }
 
+/** Resolves an API-relative path (e.g. a DTO field like song.coverArtUrl)
+ * against the configured API base -- for use directly as an <img src>,
+ * where fetch()'s automatic credentials/error handling doesn't apply. */
+export function apiUrl(path: string): string {
+  return `${getConfig().apiBaseUrl}${path}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const { apiBaseUrl } = getConfig();
-  const url = `${apiBaseUrl}${path}`;
+  const url = apiUrl(path);
+
+  const isFormData = init?.body instanceof FormData;
 
   const res = await fetch(url, {
     ...init,
     credentials: "include",
     headers: {
       Accept: "application/json",
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      // FormData bodies must NOT get an explicit Content-Type -- the browser
+      // sets one itself (multipart/form-data with the correct boundary).
+      ...(init?.body && !isFormData ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
   });
@@ -59,25 +69,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+function toBody(data: unknown): BodyInit | undefined {
+  if (data === undefined) return undefined;
+  if (data instanceof FormData) return data;
+  return JSON.stringify(data);
+}
+
 export const apiClient = {
   get: <T>(path: string) => request<T>(path, { method: "GET" }),
 
   post: <T>(path: string, data?: unknown) =>
     request<T>(path, {
       method: "POST",
-      body: data !== undefined ? JSON.stringify(data) : undefined,
+      body: toBody(data),
     }),
 
   put: <T>(path: string, data?: unknown) =>
     request<T>(path, {
       method: "PUT",
-      body: data !== undefined ? JSON.stringify(data) : undefined,
+      body: toBody(data),
     }),
 
   patch: <T>(path: string, data?: unknown) =>
     request<T>(path, {
       method: "PATCH",
-      body: data !== undefined ? JSON.stringify(data) : undefined,
+      body: toBody(data),
     }),
 
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),

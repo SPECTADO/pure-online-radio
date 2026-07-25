@@ -8,10 +8,13 @@ import { z } from "zod";
 export const TrackDirectiveSchema = z.object({
   type: z.literal("track"),
   requestId: z.string(), // idempotency key: retries of the same requestId must not double-consume state
-  mediaKind: z.enum(["SONG", "JINGLE"]),
+  mediaKind: z.enum(["SONG", "JINGLE", "AD"]),
   mediaId: z.string(),
   title: z.string(),
   artist: z.string().nullable(),
+  // API-relative path (e.g. "/library/songs/{id}/cover-art"), same convention
+  // as SongDTO.coverArtUrl -- null for jingles/ads, which have no cover art.
+  coverArtUrl: z.string().nullable(),
   durationMs: z.number().int().positive(),
   url: z.string().url(),
   urlExpiresAt: z.string().datetime(),

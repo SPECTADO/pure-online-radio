@@ -6,6 +6,7 @@ const NAV_ITEMS = [
   { to: "/schedule", label: "Schedule" },
   { to: "/library/songs", label: "Songs Library" },
   { to: "/library/jingles", label: "Jingles Library" },
+  { to: "/library/ads", label: "Ads Library" },
   { to: "/clock-wheels", label: "Clock Wheels" },
   { to: "/external-streams", label: "External Streams" },
   { to: "/settings/separation-rules", label: "Separation Rules" },

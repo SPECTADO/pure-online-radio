@@ -14,9 +14,16 @@ const EnvSchema = z.object({
   REDIS_URL: z.string().min(1, "REDIS_URL is required"),
   REDIS_PASSWORD: z.string().optional(),
 
-  S3_ENDPOINT: z.string().optional(),
-  S3_BUCKET: z.string().optional(),
+  S3_ENDPOINT: z.string().min(1, "S3_ENDPOINT is required"),
+  S3_BUCKET: z.string().min(1, "S3_BUCKET is required"),
+  S3_ACCESS_KEY_ID: z.string().min(1, "S3_ACCESS_KEY_ID is required"),
+  S3_SECRET_ACCESS_KEY: z.string().min(1, "S3_SECRET_ACCESS_KEY is required"),
   S3_FORCE_PATH_STYLE: z.coerce.boolean().default(true),
+
+  // MusicBrainz's API etiquette asks for a descriptive User-Agent identifying
+  // the application (and ideally a contact URL) -- see
+  // modules/library/metadataProviders/musicBrainzProvider.ts.
+  MUSICBRAINZ_USER_AGENT: z.string().default("SpectadoRadio/0.1 (self-hosted; no contact url configured)"),
 
   // Not in .env.example; inside docker-compose the encoder/api reach NATS via
   // the service name on the compose network.
@@ -69,8 +76,12 @@ export const config = {
   s3: {
     endpoint: env.S3_ENDPOINT,
     bucket: env.S3_BUCKET,
+    accessKeyId: env.S3_ACCESS_KEY_ID,
+    secretAccessKey: env.S3_SECRET_ACCESS_KEY,
     forcePathStyle: env.S3_FORCE_PATH_STYLE,
   },
+
+  musicBrainzUserAgent: env.MUSICBRAINZ_USER_AGENT,
 
   nats: {
     url: env.NATS_URL,
