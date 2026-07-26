@@ -17,3 +17,16 @@ redis.on("error", (err) => {
 redis.on("connect", () => {
   logger.info("[redis] connected");
 });
+
+/** Used by the system status page. Returns null if redis is unreachable or
+ * the INFO reply doesn't include the field (should never happen on a real
+ * Redis server, but this is best-effort diagnostic data, not load-bearing). */
+export async function getRedisUptimeSec(): Promise<number | null> {
+  try {
+    const info = await redis.info("server");
+    const match = /uptime_in_seconds:(\d+)/.exec(info);
+    return match ? Number(match[1]) : null;
+  } catch {
+    return null;
+  }
+}

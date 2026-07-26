@@ -6,31 +6,29 @@ import type {
   JingleEndedStatus,
   JingleStartedStatus,
   LiveMicSessionDTO,
-  MediaKind,
   NowPlayingDTO,
   NowPlayingStatus,
   PlaybackMode,
   QueueEntryDTO,
   ScratchPadDTO,
-  SongDTO,
 } from "@spectado/shared-types";
 import { NATS_SUBJECTS } from "@spectado/shared-types";
 import { apiClient, apiUrl, ApiError } from "../lib/apiClient";
 import { useNatsSubject } from "../lib/natsClient";
 import { useCountdown } from "../lib/useCountdown";
+import { useNow } from "../lib/useNow";
 import { withExpectedStartTimes } from "../lib/queueTiming";
 import { formatDuration, formatTimeOfDay } from "../lib/format";
-import { useAddToQueue } from "../lib/useAddToQueue";
 import { useTimeFormat } from "../lib/useTimeFormat";
 import { ProgressBar } from "../components/ProgressBar";
 import { MediaKindBadge } from "../components/MediaKindBadge";
+import { QuickAddSection } from "../components/QuickAddSection";
 
 const NOW_PLAYING_KEY = ["now-playing"];
 const QUEUE_KEY = ["queue"];
 const JINGLES_KEY = ["library", "jingles"];
 const SCRATCH_PAD_KEY = ["settings", "scratch-pad"];
 const UPCOMING_COUNT = 5;
-const MAX_SEARCH_RESULTS = 10;
 
 interface CurrentJingle {
   jingleId: string;
@@ -42,6 +40,8 @@ interface CurrentJingle {
 export function DashboardPage() {
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
+  const now = useNow();
+  const timeFormat = useTimeFormat();
 
   const nowPlayingQuery = useQuery({
     queryKey: NOW_PLAYING_KEY,
@@ -52,7 +52,16 @@ export function DashboardPage() {
   // Live push updates from the encoder (via the api's re-broadcast) take
   // precedence over the poll the moment one arrives.
   useNatsSubject<NowPlayingStatus>(NATS_SUBJECTS.encoderStatus.nowPlaying, (data) => {
+    const previousStartedAt = queryClient.getQueryData<NowPlayingDTO>(NOW_PLAYING_KEY)?.startedAt;
     queryClient.setQueryData<NowPlayingDTO>(NOW_PLAYING_KEY, data);
+
+    // A genuine track change (not, say, a same-track AUTO/MANUAL mode
+    // republish, which reuses the same startedAt) -- the api only drops the
+    // now-playing item off /queue a moment after this event fires, so wait
+    // it out before refreshing "Up Next" or we'd just get the stale list back.
+    if (previousStartedAt !== data.startedAt) {
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: QUEUE_KEY }), 1000);
+    }
   });
 
   const queueQuery = useQuery({
@@ -131,6 +140,11 @@ export function DashboardPage() {
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      <div className="flex justify-end">
+        <span className="tabular-nums text-sm font-medium text-slate-500">
+          {formatTimeOfDay(now, timeFormat)}
+        </span>
+      </div>
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="flex flex-col gap-6">
           <NowPlayingSection
@@ -273,105 +287,6 @@ function UpNextSection({
             </Link>
           )}
         </>
-      )}
-    </section>
-  );
-}
-
-interface QuickAddResult {
-  mediaKind: MediaKind;
-  id: string;
-  title: string;
-  subtitle: string | null;
-  durationMs: number;
-}
-
-function QuickAddSection() {
-  const addToQueue = useAddToQueue();
-  const [search, setSearch] = useState("");
-
-  const songsQuery = useQuery({
-    queryKey: ["library", "songs"],
-    queryFn: () => apiClient.get<SongDTO[]>("/library/songs"),
-  });
-  const jinglesQuery = useQuery({
-    queryKey: JINGLES_KEY,
-    queryFn: () => apiClient.get<JingleDTO[]>("/library/jingles"),
-  });
-
-  const results = useMemo<QuickAddResult[]>(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return [];
-
-    const songResults: QuickAddResult[] = (songsQuery.data ?? [])
-      .filter((song) => song.isActive && `${song.title} ${song.artist}`.toLowerCase().includes(q))
-      .map((song) => ({ mediaKind: "SONG", id: song.id, title: song.title, subtitle: song.artist, durationMs: song.durationMs }));
-
-    const jingleResults: QuickAddResult[] = (jinglesQuery.data ?? [])
-      .filter((jingle) => jingle.isActive && jingle.title.toLowerCase().includes(q))
-      .map((jingle) => ({ mediaKind: "JINGLE", id: jingle.id, title: jingle.title, subtitle: null, durationMs: jingle.durationMs }));
-
-    return [...songResults, ...jingleResults].slice(0, MAX_SEARCH_RESULTS);
-  }, [songsQuery.data, jinglesQuery.data, search]);
-
-  return (
-    <section className="rounded-lg border border-slate-200 bg-white p-6">
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">Quick Add</h2>
-
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search songs and jingles by title…"
-        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-      />
-
-      {search.trim() !== "" && (
-        <div className="mt-3 divide-y divide-slate-100 overflow-hidden rounded-md border border-slate-100">
-          {results.length === 0 && <p className="px-4 py-3 text-sm text-slate-500">No matching songs or jingles.</p>}
-          {results.map((result) => (
-            <div key={`${result.mediaKind}-${result.id}`} className="flex items-center justify-between gap-3 px-4 py-2">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <MediaKindBadge kind={result.mediaKind} />
-                  <span className="truncate text-sm font-medium text-slate-900">{result.title}</span>
-                </div>
-                <div className="truncate text-xs text-slate-500">
-                  {result.subtitle ? `${result.subtitle} · ` : ""}
-                  {formatDuration(result.durationMs)}
-                </div>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                <button
-                  type="button"
-                  disabled={addToQueue.isPending}
-                  onClick={() =>
-                    addToQueue.mutate(
-                      { mediaKind: result.mediaKind, mediaId: result.id, title: result.title },
-                      { onSuccess: () => setSearch("") },
-                    )
-                  }
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                >
-                  Add to queue
-                </button>
-                <button
-                  type="button"
-                  disabled={addToQueue.isPending}
-                  onClick={() =>
-                    addToQueue.mutate(
-                      { mediaKind: result.mediaKind, mediaId: result.id, title: result.title, playNext: true },
-                      { onSuccess: () => setSearch("") },
-                    )
-                  }
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                >
-                  Play next
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
       )}
     </section>
   );

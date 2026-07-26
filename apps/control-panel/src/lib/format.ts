@@ -41,3 +41,32 @@ export function toDatetimeLocalValue(iso: string): string {
 export function fromDatetimeLocalValue(value: string): string {
   return new Date(value).toISOString();
 }
+
+/** "2d 4h"-style uptime for a component's `uptimeSec` (null when unknown/down) --
+ * always the two largest applicable units, never more precision than that. */
+export function formatUptime(seconds: number | null): string {
+  if (seconds === null) return "—";
+
+  const total = Math.floor(seconds);
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
+
+const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"];
+
+/** "4.2 GB"-style size for a storage byte count -- whole numbers for bytes,
+ * one decimal place for anything larger. */
+export function formatBytes(bytes: number): string {
+  if (bytes <= 0) return "0 B";
+
+  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), BYTE_UNITS.length - 1);
+  const value = bytes / 1024 ** exponent;
+  return `${exponent === 0 ? value : value.toFixed(1)} ${BYTE_UNITS[exponent]}`;
+}

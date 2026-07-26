@@ -22,6 +22,7 @@ import { scheduleRoutes } from "./modules/schedule/schedule.routes.js";
 import { scratchPadRoutes } from "./modules/settings/scratchPad.routes.js";
 import { separationRulesRoutes } from "./modules/settings/separationRules.routes.js";
 import { stationRoutes } from "./modules/settings/station.routes.js";
+import { statusRoutes } from "./modules/status/status.routes.js";
 import { isNatsConnected } from "./nats/client.js";
 import { redis } from "./redis/client.js";
 
@@ -79,6 +80,7 @@ export function createApp(): Express {
   app.use("/live-mic", liveMicRoutes);
   app.use("/internal", internalRoutes);
   app.use("/public", publicRoutes);
+  app.use("/status", statusRoutes);
 
   app.use(errorHandler);
 

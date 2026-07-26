@@ -19,35 +19,29 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { NowPlayingDTO, NowPlayingStatus, QueueEntryDTO, SongDTO, TimeFormat } from "@spectado/shared-types";
+import type { NowPlayingDTO, NowPlayingStatus, QueueEntryDTO, TimeFormat } from "@spectado/shared-types";
 import { NATS_SUBJECTS } from "@spectado/shared-types";
 import { apiClient, ApiError } from "../lib/apiClient";
 import { showToast } from "../lib/toastStore";
 import { useNatsSubject } from "../lib/natsClient";
-import { useAddToQueue } from "../lib/useAddToQueue";
 import { useCountdownTo } from "../lib/useCountdownTo";
 import { useTimeFormat } from "../lib/useTimeFormat";
 import { withExpectedStartTimes } from "../lib/queueTiming";
 import { ComingSoon } from "../components/ComingSoon";
 import { Modal } from "../components/Modal";
 import { MediaKindBadge } from "../components/MediaKindBadge";
+import { QuickAddSection } from "../components/QuickAddSection";
 import { formatDuration, formatTimeOfDay } from "../lib/format";
-import { rowActionButton, rowActionButtonDanger } from "../lib/buttonStyles";
+import { rowActionButtonDanger } from "../lib/buttonStyles";
 
 type QueueItemWithStart = QueueEntryDTO & { expectedStartAt: number };
 
-const selectClass =
-  "rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
-
 const QUEUE_KEY = ["queue"];
 const NOW_PLAYING_KEY = ["now-playing"];
-const MAX_SEARCH_RESULTS = 20;
 
 export function QueuePage() {
   const queryClient = useQueryClient();
-  const addToQueue = useAddToQueue();
   const timeFormat = useTimeFormat();
-  const [search, setSearch] = useState("");
   const [pendingRemove, setPendingRemove] = useState<QueueEntryDTO | null>(null);
 
   const queueQuery = useQuery({
@@ -83,19 +77,6 @@ export function QueuePage() {
   const lastItem = itemsWithStart[itemsWithStart.length - 1];
   const plannedTillMs = lastItem ? lastItem.expectedStartAt + lastItem.durationMs : null;
 
-  const songsQuery = useQuery({
-    queryKey: ["library", "songs"],
-    queryFn: () => apiClient.get<SongDTO[]>("/library/songs"),
-  });
-
-  const searchResults = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return [];
-    return (songsQuery.data ?? [])
-      .filter((song) => `${song.title} ${song.artist}`.toLowerCase().includes(q))
-      .slice(0, MAX_SEARCH_RESULTS);
-  }, [songsQuery.data, search]);
-
   const removeMutation = useMutation({
     mutationFn: (item: QueueEntryDTO) => apiClient.delete(`/queue/items/${item.id}`),
     onSuccess: (_data, item) => {
@@ -113,9 +94,9 @@ export function QueuePage() {
 
   const reorderMutation = useMutation({
     mutationFn: (orderedIds: string[]) => apiClient.patch("/queue/items/reorder", { orderedIds }),
-    // Reorder the cached list immediately so a drag-drop (or an up/down click)
-    // lands exactly where it was dropped instead of snapping back to the old
-    // order until the request round-trips.
+    // Reorder the cached list immediately so a drag-drop lands exactly where
+    // it was dropped instead of snapping back to the old order until the
+    // request round-trips.
     onMutate: async (orderedIds) => {
       await queryClient.cancelQueries({ queryKey: QUEUE_KEY });
       const previous = queryClient.getQueryData<QueueEntryDTO[]>(QUEUE_KEY);
@@ -143,13 +124,9 @@ export function QueuePage() {
     reorderMutation.mutate(arrayMove(items, fromIndex, toIndex).map((item) => item.id));
   }
 
-  function moveItem(items: QueueEntryDTO[], index: number, direction: -1 | 1) {
-    reorderTo(items, index, index + direction);
-  }
-
   const sensors = useSensors(
     // Requires a small drag before activating, so a plain click on the row
-    // (or on the up/down/remove buttons) doesn't get swallowed as a drag.
+    // (or on the remove button) doesn't get swallowed as a drag.
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
@@ -183,43 +160,7 @@ export function QueuePage() {
         )}
       </div>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6">
-        <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">
-          Add a song
-        </h2>
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by title or artist…"
-          className={`${selectClass} w-full`}
-        />
-
-        {search.trim() !== "" && (
-          <div className="mt-3 divide-y divide-slate-100 overflow-hidden rounded-md border border-slate-100">
-            {searchResults.length === 0 && (
-              <p className="px-4 py-3 text-sm text-slate-500">No matching songs.</p>
-            )}
-            {searchResults.map((song) => (
-              <div key={song.id} className="flex items-center justify-between gap-3 px-4 py-2">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-slate-900">{song.title}</div>
-                  <div className="truncate text-xs text-slate-500">
-                    {song.artist} · {formatDuration(song.durationMs)}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => addToQueue.mutate({ mediaKind: "SONG", mediaId: song.id, title: song.title })}
-                  className={`shrink-0 ${rowActionButton}`}
-                >
-                  Add to queue
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      <QuickAddSection />
 
       {queueQuery.isLoading && <p className="text-sm text-slate-500">Loading…</p>}
 
@@ -264,17 +205,13 @@ export function QueuePage() {
                   items={itemsWithStart.map((item) => item.id)}
                   strategy={verticalListSortingStrategy}
                 >
-                  {itemsWithStart.map((entry, index, items) => (
+                  {itemsWithStart.map((entry, index) => (
                     <QueueRow
                       key={entry.id}
                       entry={entry}
                       timeFormat={timeFormat}
                       countdownMs={index === 0 ? firstItemCountdownMs : null}
                       isFirst={index === 0}
-                      isLast={index === items.length - 1}
-                      moveDisabled={reorderMutation.isPending}
-                      onMoveUp={() => moveItem(items, index, -1)}
-                      onMoveDown={() => moveItem(items, index, 1)}
                       onRemove={() => setPendingRemove(entry)}
                     />
                   ))}
@@ -350,20 +287,12 @@ function QueueRow({
   timeFormat,
   countdownMs,
   isFirst,
-  isLast,
-  moveDisabled,
-  onMoveUp,
-  onMoveDown,
   onRemove,
 }: {
   entry: QueueItemWithStart;
   timeFormat: TimeFormat;
   countdownMs: number | null;
   isFirst: boolean;
-  isLast: boolean;
-  moveDisabled: boolean;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
   onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
@@ -400,28 +329,8 @@ function QueueRow({
       </td>
       <td className="px-4 py-3 text-slate-600">{formatDuration(entry.durationMs)}</td>
       <td className="px-4 py-3">
-        {/* Stops the drag listeners above from swallowing plain button clicks. */}
-        <div className="flex justify-end gap-2" onPointerDown={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            onClick={onMoveUp}
-            disabled={isFirst || moveDisabled}
-            aria-label="Move up"
-            title="Move up"
-            className={rowActionButton}
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            onClick={onMoveDown}
-            disabled={isLast || moveDisabled}
-            aria-label="Move down"
-            title="Move down"
-            className={rowActionButton}
-          >
-            ↓
-          </button>
+        {/* Stops the drag listeners above from swallowing a plain button click. */}
+        <div className="flex justify-end" onPointerDown={(e) => e.stopPropagation()}>
           <button type="button" onClick={onRemove} className={rowActionButtonDanger}>
             Remove
           </button>

@@ -20,6 +20,9 @@ const NAV_TOP: NavLeaf[] = [
   { to: "/queue", label: "Queue" },
 ];
 
+// Rendered after NAV_GROUPS -- always the last entry in the sidebar.
+const NAV_BOTTOM: NavLeaf[] = [{ to: "/system-status", label: "System Status" }];
+
 const NAV_GROUPS: NavGroup[] = [
   {
     label: "Library",
@@ -124,6 +127,14 @@ export function NavSidebar() {
       <div className="mt-2 flex flex-col gap-1">
         {NAV_GROUPS.map((group) => (
           <NavGroupSection key={group.label} group={group} active={isGroupActive(group, location.pathname)} />
+        ))}
+      </div>
+
+      <div className="mt-2 flex flex-col gap-1">
+        {NAV_BOTTOM.map((item) => (
+          <NavLink key={item.to} to={item.to} end={item.end} className={leafLinkClass}>
+            {item.label}
+          </NavLink>
         ))}
       </div>
     </nav>

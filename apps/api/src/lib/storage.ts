@@ -1,5 +1,12 @@
 import type { Readable } from "node:stream";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadBucketCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "../config/env.js";
 
@@ -34,6 +41,81 @@ export async function uploadObject(key: string, body: Buffer, contentType: strin
 
 export async function deleteObject(key: string): Promise<void> {
   await s3.send(new DeleteObjectCommand({ Bucket: config.s3.bucket, Key: key }));
+}
+
+/** Used by the system status page -- HeadBucket works against any S3-compatible
+ * endpoint (unlike MinIO's own `/minio/health/live`), so this keeps working if
+ * `S3_ENDPOINT` is later pointed at a real AWS/other provider. */
+export async function isStorageHealthy(): Promise<boolean> {
+  try {
+    await s3.send(new HeadBucketCommand({ Bucket: config.s3.bucket }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface StorageKindStats {
+  objectCount: number;
+  totalBytes: number;
+}
+
+export interface StorageStats {
+  totalBytes: number;
+  totalObjectCount: number;
+  songs: StorageKindStats;
+  jingles: StorageKindStats;
+  ads: StorageKindStats;
+}
+
+function emptyKindStats(): StorageKindStats {
+  return { objectCount: 0, totalBytes: 0 };
+}
+
+/**
+ * Used by the system status page. A single paginated listing of the whole
+ * bucket, bucketed by the `{kind}/{id}/...` key prefix convention (see
+ * songAudioKey/jingleAudioKey/adAudioKey below) -- real object counts/bytes
+ * as MinIO actually has them (so this also counts cover art and any
+ * orphaned objects), not a derived sum of the DB's fileSizeBytes columns.
+ */
+export async function getStorageStats(): Promise<StorageStats> {
+  const byKind: Record<"songs" | "jingles" | "ads", StorageKindStats> = {
+    songs: emptyKindStats(),
+    jingles: emptyKindStats(),
+    ads: emptyKindStats(),
+  };
+  let totalBytes = 0;
+  let totalObjectCount = 0;
+  let continuationToken: string | undefined;
+
+  do {
+    const page = await s3.send(
+      new ListObjectsV2Command({ Bucket: config.s3.bucket, ContinuationToken: continuationToken }),
+    );
+
+    for (const object of page.Contents ?? []) {
+      const size = object.Size ?? 0;
+      totalBytes += size;
+      totalObjectCount += 1;
+
+      const kind = object.Key?.startsWith("songs/")
+        ? "songs"
+        : object.Key?.startsWith("jingles/")
+          ? "jingles"
+          : object.Key?.startsWith("ads/")
+            ? "ads"
+            : null;
+      if (kind) {
+        byKind[kind].objectCount += 1;
+        byKind[kind].totalBytes += size;
+      }
+    }
+
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return { totalBytes, totalObjectCount, ...byKind };
 }
 
 /**

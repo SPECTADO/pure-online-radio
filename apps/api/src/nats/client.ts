@@ -45,6 +45,26 @@ export function isNatsConnected(): boolean {
   return connection !== undefined && !connection.isClosed();
 }
 
+/**
+ * Used by the system status page. NATS's monitoring HTTP port (8222, see the
+ * `nats` service's healthcheck in docker-compose.yml) is only reachable
+ * inside the compose network -- fine here since the api always runs there.
+ * Derives the host from `config.nats.url` rather than hardcoding "nats" so
+ * this keeps working if that ever changes.
+ */
+export async function getNatsUptimeSec(): Promise<number | null> {
+  try {
+    const host = new URL(config.nats.url).hostname;
+    const res = await fetch(`http://${host}:8222/varz`, { signal: AbortSignal.timeout(2000) });
+    if (!res.ok) return null;
+    const varz = (await res.json()) as { start?: string };
+    if (!varz.start) return null;
+    return (Date.now() - new Date(varz.start).getTime()) / 1000;
+  } catch {
+    return null;
+  }
+}
+
 export async function disconnectNats(): Promise<void> {
   if (connection) {
     await connection.drain();
