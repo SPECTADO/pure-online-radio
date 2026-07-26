@@ -74,6 +74,12 @@ services:
     # binding to the container's own localhost only, unreachable via the port
     # mapping below.
     command: ["pnpm", "--filter", "@spectado/control-panel", "dev"]
+    environment:
+      # vite.config.ts's default (localhost:3000) assumes host-side `pnpm dev`,
+      # where Docker's published port makes that resolve. Inside this
+      # container, localhost is the container itself, not api -- reach it via
+      # the `edge` network's Docker DNS instead (api joins both data and edge).
+      - VITE_DEV_API_PROXY_TARGET=http://api:3000
     volumes:
       - "./apps/control-panel:/app/apps/control-panel"
       - "./packages:/app/packages"
@@ -92,6 +98,9 @@ services:
     # See the same note on control-panel-dev above — --host is baked into the
     # "dev" script itself (apps/player/package.json), not passed here.
     command: ["pnpm", "--filter", "@spectado/player", "dev"]
+    environment:
+      # Same reasoning as control-panel-dev above.
+      - VITE_DEV_API_PROXY_TARGET=http://api:3000
     volumes:
       - "./apps/player:/app/apps/player"
       - "./packages:/app/packages"

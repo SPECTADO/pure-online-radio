@@ -8,10 +8,15 @@ export function formatDuration(durationMs: number): string {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-/** "3:45 PM"-style clock time (no date) for an epoch-ms timestamp -- respects
+/** "3:45:07 PM"-style clock time (no date) for an epoch-ms timestamp -- respects
  * the station's 12h/24h display preference (see lib/useTimeFormat.ts). */
 export function formatTimeOfDay(ms: number, timeFormat: TimeFormat = "12h"): string {
-  return new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: timeFormat === "12h" });
+  return new Date(ms).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: timeFormat === "12h",
+  });
 }
 
 export function formatDateTime(iso: string | null, timeFormat: TimeFormat = "12h"): string {

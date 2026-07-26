@@ -1,6 +1,25 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { NowPlayingDTO, NowPlayingStatus, QueueEntryDTO, SongDTO } from "@spectado/shared-types";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import type { NowPlayingDTO, NowPlayingStatus, QueueEntryDTO, SongDTO, TimeFormat } from "@spectado/shared-types";
 import { NATS_SUBJECTS } from "@spectado/shared-types";
 import { apiClient, ApiError } from "../lib/apiClient";
 import { showToast } from "../lib/toastStore";
@@ -11,8 +30,11 @@ import { useTimeFormat } from "../lib/useTimeFormat";
 import { withExpectedStartTimes } from "../lib/queueTiming";
 import { ComingSoon } from "../components/ComingSoon";
 import { Modal } from "../components/Modal";
-import { formatDateTime, formatDuration, formatTimeOfDay } from "../lib/format";
+import { MediaKindBadge } from "../components/MediaKindBadge";
+import { formatDuration, formatTimeOfDay } from "../lib/format";
 import { rowActionButton, rowActionButtonDanger } from "../lib/buttonStyles";
+
+type QueueItemWithStart = QueueEntryDTO & { expectedStartAt: number };
 
 const selectClass =
   "rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
@@ -58,6 +80,8 @@ export function QueuePage() {
     [nowPlayingQuery.data, queueQuery.data],
   );
   const firstItemCountdownMs = useCountdownTo(itemsWithStart[0]?.expectedStartAt ?? null);
+  const lastItem = itemsWithStart[itemsWithStart.length - 1];
+  const plannedTillMs = lastItem ? lastItem.expectedStartAt + lastItem.durationMs : null;
 
   const songsQuery = useQuery({
     queryKey: ["library", "songs"],
@@ -89,28 +113,75 @@ export function QueuePage() {
 
   const reorderMutation = useMutation({
     mutationFn: (orderedIds: string[]) => apiClient.patch("/queue/items/reorder", { orderedIds }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: QUEUE_KEY }),
-    onError: (err) => {
+    // Reorder the cached list immediately so a drag-drop (or an up/down click)
+    // lands exactly where it was dropped instead of snapping back to the old
+    // order until the request round-trips.
+    onMutate: async (orderedIds) => {
+      await queryClient.cancelQueries({ queryKey: QUEUE_KEY });
+      const previous = queryClient.getQueryData<QueueEntryDTO[]>(QUEUE_KEY);
+      if (previous) {
+        const byId = new Map(previous.map((item) => [item.id, item]));
+        queryClient.setQueryData<QueueEntryDTO[]>(
+          QUEUE_KEY,
+          orderedIds.map((id) => byId.get(id)).filter((item): item is QueueEntryDTO => item !== undefined),
+        );
+      }
+      return { previous };
+    },
+    onError: (err, _orderedIds, context) => {
+      if (context?.previous) queryClient.setQueryData(QUEUE_KEY, context.previous);
       showToast(
         "error",
         `Couldn't reorder the queue: ${err instanceof ApiError ? err.message : "request failed"}`,
       );
     },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: QUEUE_KEY }),
   });
 
+  function reorderTo(items: QueueEntryDTO[], fromIndex: number, toIndex: number) {
+    if (fromIndex === toIndex || toIndex < 0 || toIndex >= items.length) return;
+    reorderMutation.mutate(arrayMove(items, fromIndex, toIndex).map((item) => item.id));
+  }
+
   function moveItem(items: QueueEntryDTO[], index: number, direction: -1 | 1) {
-    const targetIndex = index + direction;
-    if (targetIndex < 0 || targetIndex >= items.length) return;
-    const reordered = [...items];
-    const [moved] = reordered.splice(index, 1);
-    if (!moved) return;
-    reordered.splice(targetIndex, 0, moved);
-    reorderMutation.mutate(reordered.map((item) => item.id));
+    reorderTo(items, index, index + direction);
+  }
+
+  const sensors = useSensors(
+    // Requires a small drag before activating, so a plain click on the row
+    // (or on the up/down/remove buttons) doesn't get swallowed as a drag.
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const activeItem = itemsWithStart.find((item) => item.id === activeId) ?? null;
+
+  function handleDragStart(event: DragStartEvent) {
+    setActiveId(String(event.active.id));
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    setActiveId(null);
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = itemsWithStart.findIndex((item) => item.id === active.id);
+    const newIndex = itemsWithStart.findIndex((item) => item.id === over.id);
+    reorderTo(itemsWithStart, oldIndex, newIndex);
   }
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold text-slate-900">Queue</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold text-slate-900">Queue</h1>
+        {plannedTillMs !== null && (
+          <span className="text-sm text-slate-500">
+            Planned till{" "}
+            <span className="tabular-nums font-medium text-slate-700">
+              {formatTimeOfDay(plannedTillMs, timeFormat)}
+            </span>
+          </span>
+        )}
+      </div>
 
       <section className="rounded-lg border border-slate-200 bg-white p-6">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">
@@ -170,72 +241,77 @@ export function QueuePage() {
       )}
 
       {queueQuery.data && queueQuery.data.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-              <tr>
-                <th className="px-4 py-3">Title</th>
-                <th className="px-4 py-3">Kind</th>
-                <th className="px-4 py-3">Duration</th>
-                <th className="px-4 py-3">Starts at</th>
-                <th className="px-4 py-3">Added</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {itemsWithStart.map((entry, index, items) => (
-                <tr key={entry.id}>
-                  <td className="px-4 py-3 font-medium text-slate-900">
-                    {entry.title}
-                    {entry.artist && <span className="ml-2 font-normal text-slate-500">{entry.artist}</span>}
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">{entry.mediaKind}</td>
-                  <td className="px-4 py-3 text-slate-600">{formatDuration(entry.durationMs)}</td>
-                  <td className="px-4 py-3 text-slate-600">
-                    {formatTimeOfDay(entry.expectedStartAt, timeFormat)}
-                    {index === 0 && firstItemCountdownMs !== null && (
-                      <span className="ml-2 text-xs tabular-nums text-slate-400">
-                        (in {formatDuration(firstItemCountdownMs)})
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">{formatDateTime(entry.addedAt, timeFormat)}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => moveItem(items, index, -1)}
-                        disabled={index === 0 || reorderMutation.isPending}
-                        aria-label="Move up"
-                        title="Move up"
-                        className={rowActionButton}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => moveItem(items, index, 1)}
-                        disabled={index === items.length - 1 || reorderMutation.isPending}
-                        aria-label="Move down"
-                        title="Move down"
-                        className={rowActionButton}
-                      >
-                        ↓
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPendingRemove(entry)}
-                        className={rowActionButtonDanger}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </td>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={() => setActiveId(null)}
+        >
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Starts at</th>
+                  <th className="px-4 py-3">Title</th>
+                  <th className="px-4 py-3">Kind</th>
+                  <th className="px-4 py-3">Duration</th>
+                  <th className="px-4 py-3" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                <SortableContext
+                  items={itemsWithStart.map((item) => item.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {itemsWithStart.map((entry, index, items) => (
+                    <QueueRow
+                      key={entry.id}
+                      entry={entry}
+                      timeFormat={timeFormat}
+                      countdownMs={index === 0 ? firstItemCountdownMs : null}
+                      isFirst={index === 0}
+                      isLast={index === items.length - 1}
+                      moveDisabled={reorderMutation.isPending}
+                      onMoveUp={() => moveItem(items, index, -1)}
+                      onMoveDown={() => moveItem(items, index, 1)}
+                      onRemove={() => setPendingRemove(entry)}
+                    />
+                  ))}
+                </SortableContext>
+              </tbody>
+            </table>
+          </div>
+
+          <DragOverlay>
+            {activeItem && (
+              <table className="w-full text-left text-sm shadow-xl">
+                <tbody>
+                  <tr className="rounded-lg border border-slate-300 bg-white">
+                    <td className="rounded-l-lg px-4 py-3 text-slate-600">
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-400">⠿</span>
+                        <span>{formatTimeOfDay(activeItem.expectedStartAt, timeFormat)}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-medium text-slate-900">
+                      {activeItem.title}
+                      {activeItem.artist && (
+                        <span className="ml-2 font-normal text-slate-500">{activeItem.artist}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <MediaKindBadge kind={activeItem.mediaKind} />
+                    </td>
+                    <td className="rounded-r-lg px-4 py-3 text-slate-600">
+                      {formatDuration(activeItem.durationMs)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
+          </DragOverlay>
+        </DndContext>
       )}
 
       {pendingRemove && (
@@ -266,5 +342,91 @@ export function QueuePage() {
         </Modal>
       )}
     </div>
+  );
+}
+
+function QueueRow({
+  entry,
+  timeFormat,
+  countdownMs,
+  isFirst,
+  isLast,
+  moveDisabled,
+  onMoveUp,
+  onMoveDown,
+  onRemove,
+}: {
+  entry: QueueItemWithStart;
+  timeFormat: TimeFormat;
+  countdownMs: number | null;
+  isFirst: boolean;
+  isLast: boolean;
+  moveDisabled: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onRemove: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
+
+  return (
+    <tr
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      {...attributes}
+      {...listeners}
+      className={`cursor-grab touch-none select-none active:cursor-grabbing ${
+        isDragging ? "relative z-10 bg-slate-50 opacity-50" : ""
+      }`}
+    >
+      <td className="px-4 py-3 text-slate-600">
+        <div className="flex items-center gap-2">
+          <span aria-hidden="true" className="text-slate-300">
+            ⠿
+          </span>
+          <span>
+            {formatTimeOfDay(entry.expectedStartAt, timeFormat)}
+            {isFirst && countdownMs !== null && (
+              <span className="ml-2 text-xs tabular-nums text-slate-400">(in {formatDuration(countdownMs)})</span>
+            )}
+          </span>
+        </div>
+      </td>
+      <td className="px-4 py-3 font-medium text-slate-900">
+        {entry.title}
+        {entry.artist && <span className="ml-2 font-normal text-slate-500">{entry.artist}</span>}
+      </td>
+      <td className="px-4 py-3">
+        <MediaKindBadge kind={entry.mediaKind} />
+      </td>
+      <td className="px-4 py-3 text-slate-600">{formatDuration(entry.durationMs)}</td>
+      <td className="px-4 py-3">
+        {/* Stops the drag listeners above from swallowing plain button clicks. */}
+        <div className="flex justify-end gap-2" onPointerDown={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            onClick={onMoveUp}
+            disabled={isFirst || moveDisabled}
+            aria-label="Move up"
+            title="Move up"
+            className={rowActionButton}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={onMoveDown}
+            disabled={isLast || moveDisabled}
+            aria-label="Move down"
+            title="Move down"
+            className={rowActionButton}
+          >
+            ↓
+          </button>
+          <button type="button" onClick={onRemove} className={rowActionButtonDanger}>
+            Remove
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }

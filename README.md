@@ -170,9 +170,10 @@ from another terminal. If you'd rather run detached without the frontend HMR con
 > `.env` automatically now (via `tsx`'s `--env-file-if-exists`) for one-off host-side scripts (e.g. `prisma studio`,
 > ad hoc queries), but their actual dev servers are meant to run inside `docker compose up`/`pnpm run dev`, not
 > standalone. `apps/control-panel`/`apps/player`, by contrast, are perfectly fine to run raw on the host if you
-> prefer (`pnpm --filter @spectado/control-panel dev`) — their dev proxy targets `localhost:3000`, which _is_
-> reachable from the host since Docker publishes that port; that's exactly what the `dev-hmr` profile's containers
-> do too, just inside Docker for a consistent environment across machines.
+> prefer (`pnpm --filter @spectado/control-panel dev`) — their dev proxy targets `localhost:3000` by default, which
+> _is_ reachable from the host since Docker publishes that port. The `dev-hmr` profile's own `control-panel-dev`/
+> `player-dev` containers instead override `VITE_DEV_API_PROXY_TARGET` to `http://api:3000` (see the Troubleshooting
+> entry on the dev proxy below) since `localhost` inside those containers means the container itself, not `api`.
 
 The database schema is **not** created automatically the very first time — generate and apply the initial migration
 once against the running Postgres:
@@ -375,6 +376,20 @@ originally passed via Compose's exec-form `command: [..., "dev", "--", "--host"]
 `pnpm run <script> -- <args>` array this way didn't reliably strip pnpm's own `--` separator, so `--host` reached
 Vite as a literal, unrecognized argument. Fixed by baking `--host` directly into each app's own `"dev": "vite
 --host"` script instead of passing it through Compose at all.
+
+**Vite dev container is reachable but every `/api/*` call 404s or the browser can't reach the API at all
+(`ECONNREFUSED`/502 through the `:5173`/`:5174` proxy).** Two separate bugs, both hit for real:
+
+1. `apps/control-panel/vite.config.ts` and `apps/player/vite.config.ts`'s dev proxy forwarded `/api/*` verbatim, but
+   the api app mounts routes at the bare path (`/auth`, `/queue`, `/public`, ...) — nginx strips the `/api` prefix in
+   production (see the `webserver` entry above), so the dev proxy needs the same `rewrite: (path) =>
+   path.replace(/^\/api/, "")` or every request 404s against the api.
+2. `VITE_DEV_API_PROXY_TARGET` defaults to `http://localhost:3000`, which is correct for host-side `pnpm --filter
+   @spectado/control-panel dev` (Docker publishes that port to the host) but wrong _inside_ the `control-panel-dev`/
+   `player-dev` containers themselves — there, `localhost` is the container, not `api`. Fixed by setting
+   `VITE_DEV_API_PROXY_TARGET=http://api:3000` for both dev services in `docker-compose.override.yml`, using Docker's
+   embedded DNS over the `edge` network they share with `api` (rather than `host.docker.internal`, which needs extra
+   config on native Linux Docker).
 
 **Login "succeeds" (200 + user JSON) but every subsequent request 401s** (`missing access token`, or the control
 panel shows "Connection error" / can't skip/start/reach `/auth/me`). The whole stack runs over plain HTTP in dev
