@@ -37,7 +37,6 @@ export function StationSettingsPage() {
   const [description, setDescription] = useState("");
   const [links, setLinks] = useState<StationLinkDTO[]>([]);
   const [timeFormat, setTimeFormat] = useState<TimeFormat>("12h");
-  const [queuePlanningHorizonMinutes, setQueuePlanningHorizonMinutes] = useState(240);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreviewUrl, setLogoPreviewUrl] = useState<string | null>(null);
   const [removeLogo, setRemoveLogo] = useState(false);
@@ -62,7 +61,6 @@ export function StationSettingsPage() {
     setDescription(query.data.description ?? "");
     setLinks(query.data.links);
     setTimeFormat(query.data.timeFormat);
-    setQueuePlanningHorizonMinutes(query.data.queuePlanningHorizonMinutes);
   }, [query.data]);
 
   const updateMutation = useMutation({
@@ -105,7 +103,6 @@ export function StationSettingsPage() {
       JSON.stringify(links.map((link) => ({ ...link, url: link.url.trim() })).filter((link) => link.url !== "")),
     );
     formData.set("timeFormat", timeFormat);
-    formData.set("queuePlanningHorizonMinutes", String(queuePlanningHorizonMinutes));
     if (logoFile) {
       formData.set("logo", logoFile);
     } else if (removeLogo) {
@@ -208,25 +205,6 @@ export function StationSettingsPage() {
                 </button>
               ))}
             </div>
-          </div>
-
-          <div className="rounded-lg border border-slate-200 bg-white p-6">
-            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">
-              Queue planning
-            </h2>
-            <label>
-              <span className={labelClass}>Plan the queue ahead by (minutes)</span>
-              <input
-                type="number"
-                min={1}
-                value={queuePlanningHorizonMinutes}
-                onChange={(e) => setQueuePlanningHorizonMinutes(Number(e.target.value))}
-                className={`max-w-xs ${inputClass}`}
-              />
-            </label>
-            <p className="mt-1 text-xs text-slate-400">
-              How far ahead the clock wheel keeps the queue filled -- e.g. 240 = 4 hours.
-            </p>
           </div>
 
           <div className="rounded-lg border border-slate-200 bg-white p-6">

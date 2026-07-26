@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { Router, type Request } from "express";
 import { Prisma, prisma } from "@spectado/database";
 import {
+  ALL_CATEGORY_NAME,
   ApplyMetadataRequestSchema,
+  BatchCategoryRequestSchema,
+  BatchDeleteRequestSchema,
+  BatchResultSchema,
   CreateSongRequestSchema,
   MetadataSearchQuerySchema,
   MetadataSearchResultSchema,
@@ -67,6 +71,61 @@ async function resolveCategoryIds(requestedIds: string[]): Promise<string[]> {
   const allCategoryId = await ensureAllCategoryId();
   return [...new Set([...requestedIds, allCategoryId])];
 }
+
+songsRoutes.post("/batch-delete", async (req, res) => {
+  const parsed = BatchDeleteRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid request", details: parsed.error.issues });
+    return;
+  }
+
+  const songs = await prisma.song.findMany({
+    where: { id: { in: parsed.data.ids } },
+    select: { id: true, fileKey: true, coverArtKey: true },
+  });
+
+  await prisma.song.deleteMany({ where: { id: { in: songs.map((s) => s.id) } } });
+  for (const song of songs) {
+    await deleteObject(song.fileKey).catch(() => {});
+    if (song.coverArtKey) await deleteObject(song.coverArtKey).catch(() => {});
+  }
+
+  res.json(BatchResultSchema.parse({ count: songs.length }));
+});
+
+songsRoutes.post("/batch-category", async (req, res) => {
+  const parsed = BatchCategoryRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid request", details: parsed.error.issues });
+    return;
+  }
+
+  if (parsed.data.action === "remove" && parsed.data.categoryId === (await ensureAllCategoryId())) {
+    res.status(400).json({ error: `the "${ALL_CATEGORY_NAME}" category cannot be removed` });
+    return;
+  }
+
+  const data: Prisma.SongUpdateInput = {
+    categories:
+      parsed.data.action === "add"
+        ? { connect: { id: parsed.data.categoryId } }
+        : { disconnect: { id: parsed.data.categoryId } },
+  };
+
+  let count = 0;
+  for (const id of parsed.data.ids) {
+    try {
+      await prisma.song.update({ where: { id }, data });
+      count++;
+    } catch (err) {
+      // Missing song or bad categoryId -- skip it and keep applying to the rest.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") continue;
+      throw err;
+    }
+  }
+
+  res.json(BatchResultSchema.parse({ count }));
+});
 
 // Metadata search must be registered before "/:id" so "metadata-search" isn't
 // swallowed as a song id.

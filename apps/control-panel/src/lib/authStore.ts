@@ -52,8 +52,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       await apiClient.post("/auth/logout");
     } catch {
-      // Best-effort: even if the endpoint doesn't exist yet (404/501) or the
-      // request fails, drop the local session so the UI reflects "logged out".
+      // Best-effort: even if the request fails (e.g. API unreachable), drop
+      // the local session so the UI reflects "logged out".
     }
     set({ user: null });
   },

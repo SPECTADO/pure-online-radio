@@ -5,6 +5,7 @@ import {
   type CategoryLibraryStatsDTO,
   type ComponentStatusDTO,
   type LibraryStatsDTO,
+  type QueueStatsDTO,
   type SystemStatusDTO,
 } from "@spectado/shared-types";
 import { logger } from "../../logger.js";
@@ -176,8 +177,27 @@ async function getLibraryStats(): Promise<LibraryStatsDTO> {
   };
 }
 
+/** Same "queue" definition GET /queue itself uses: due one-off items,
+ * clock-wheel-filled items, and manually-queued ones -- not schedule-rule
+ * items still waiting for a future fire time (those live under
+ * /schedule/upcoming). `manual` is broken out separately since it's the one
+ * subset a manager actually chose to queue by hand. */
+async function getQueueStats(): Promise<QueueStatsDTO> {
+  const now = new Date();
+  const [total, manual] = await Promise.all([
+    prisma.scheduledItem.count({
+      where: {
+        status: "PENDING",
+        OR: [{ scheduledFor: null }, { clockWheelStepId: { not: null } }, { scheduledFor: { lte: now } }],
+      },
+    }),
+    prisma.scheduledItem.count({ where: { status: "PENDING", scheduledFor: null } }),
+  ]);
+  return { total, manual };
+}
+
 statusRoutes.get("/", async (_req, res) => {
-  const [components, library, storage, queuedItemCount] = await Promise.all([
+  const [components, library, storage, queue] = await Promise.all([
     Promise.all([
       checkApi(),
       checkDatabase(),
@@ -191,7 +211,7 @@ statusRoutes.get("/", async (_req, res) => {
     ]),
     safely(getLibraryStats),
     safely(getStorageStats),
-    safely(() => prisma.scheduledItem.count({ where: { status: "PENDING", scheduledFor: null } })),
+    safely(getQueueStats),
   ]);
 
   const status: SystemStatusDTO = {
@@ -199,7 +219,7 @@ statusRoutes.get("/", async (_req, res) => {
     components,
     library,
     storage,
-    queuedItemCount,
+    queue,
   };
   res.json(SystemStatusSchema.parse(status));
 });

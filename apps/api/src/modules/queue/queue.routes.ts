@@ -205,9 +205,30 @@ queueRoutes.delete("/items/:id", async (req, res) => {
   res.status(204).send();
 });
 
-const ReorderQueueRequestSchema = z.object({ orderedIds: z.array(z.string()).min(1) });
+// A distinct top-level path (not /items/rotation) so it can't be shadowed by /items/:id --
+// see schedule.routes.ts's /upcoming-before-/:id comment for the same class of bug.
+// Bulk-removes every not-yet-played clock-wheel fill; the engine regenerates fresh content
+// on its next tick (same "cancel, don't strand" reasoning as clockWheels.routes.ts's
+// step-replace/delete handlers), so this is a real "start rotation over" action, not
+// destructive in a way that leaves the queue empty for long.
+queueRoutes.delete("/rotation", async (_req, res) => {
+  const { count } = await prisma.scheduledItem.deleteMany({
+    where: { status: "PENDING", clockWheelStepId: { not: null } },
+  });
+  await publishQueueUpdated("rotation-cleared");
+  res.json({ removed: count });
+});
 
-// Body is the full new ordering (every currently-PENDING item's id, in the
+const ReorderQueueRequestSchema = z.object({
+  // "manual" = the manager-queued FIFO (scheduledFor: null); "rotation" = clock-wheel-filled
+  // items (clockWheelStepId set) -- reordering only ever happens within one pool at a time,
+  // never across tiers (due schedule-fired items are never reorderable at all), since the
+  // claim priority between pools is fixed regardless of position -- see claimNextQueueItem.
+  scope: z.enum(["manual", "rotation"]).default("manual"),
+  orderedIds: z.array(z.string()).min(1),
+});
+
+// Body is the full new ordering (every currently-PENDING item's id in `scope`, in the
 // desired order) rather than a from/to index pair -- simpler to reason
 // about, atomic, and works unchanged for a future drag-and-drop UI in
 // addition to today's move-up/move-down buttons.
@@ -218,15 +239,17 @@ queueRoutes.patch("/items/reorder", async (req, res) => {
     return;
   }
 
-  const pending = await prisma.scheduledItem.findMany({
-    where: { status: "PENDING", scheduledFor: null },
-    select: { id: true },
-  });
+  const { scope, orderedIds } = parsed.data;
+  const where: Prisma.ScheduledItemWhereInput =
+    scope === "manual"
+      ? { status: "PENDING", scheduledFor: null }
+      : { status: "PENDING", clockWheelStepId: { not: null } };
+
+  const pending = await prisma.scheduledItem.findMany({ where, select: { id: true } });
   const pendingIds = new Set(pending.map((p) => p.id));
-  const { orderedIds } = parsed.data;
 
   if (orderedIds.length !== pendingIds.size || !orderedIds.every((id) => pendingIds.has(id))) {
-    res.status(400).json({ error: "orderedIds must contain exactly the current pending queue items" });
+    res.status(400).json({ error: `orderedIds must contain exactly the current pending ${scope} queue items` });
     return;
   }
 

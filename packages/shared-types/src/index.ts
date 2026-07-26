@@ -1,6 +1,7 @@
 export * from "./dto/common.js";
 export * from "./dto/auth.js";
 export * from "./dto/category.js";
+export * from "./dto/batch.js";
 export * from "./dto/song.js";
 export * from "./dto/jingle.js";
 export * from "./dto/ad.js";

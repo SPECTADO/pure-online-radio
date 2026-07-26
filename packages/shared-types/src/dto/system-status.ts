@@ -54,6 +54,16 @@ export const StorageStatsSchema = z.object({
 });
 export type StorageStatsDTO = z.infer<typeof StorageStatsSchema>;
 
+export const QueueStatsSchema = z.object({
+  // Everything actually eligible to play now or via rotation -- due one-off
+  // items, clock-wheel-filled items, and manually-queued ones. Excludes
+  // schedule-rule items still waiting for a future fire time (see
+  // /schedule/upcoming for those), same "queue" definition GET /queue uses.
+  total: z.number().int().nonnegative(),
+  manual: z.number().int().nonnegative(),
+});
+export type QueueStatsDTO = z.infer<typeof QueueStatsSchema>;
+
 // Nullable rather than a schema-wide try/catch -- library/storage/queue stats
 // each depend on a backing service (Postgres/MinIO) that the "components"
 // section above may simultaneously be reporting as down. null means "that
@@ -65,6 +75,6 @@ export const SystemStatusSchema = z.object({
   components: z.array(ComponentStatusSchema),
   library: LibraryStatsSchema.nullable(),
   storage: StorageStatsSchema.nullable(),
-  queuedItemCount: z.number().int().nonnegative().nullable(),
+  queue: QueueStatsSchema.nullable(),
 });
 export type SystemStatusDTO = z.infer<typeof SystemStatusSchema>;

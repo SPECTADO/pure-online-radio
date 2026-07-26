@@ -44,7 +44,7 @@ function toScheduleRuleDTO(rule: RuleWithItems) {
 // Registered before "/:id" so it isn't shadowed as an id lookup.
 scheduleRoutes.get("/upcoming", async (_req, res) => {
   const items = await prisma.scheduledItem.findMany({
-    where: { status: "PENDING", scheduledFor: { not: null } },
+    where: { status: "PENDING", scheduledFor: { not: null }, scheduleRuleId: { not: null } },
     include: queueEntryInclude,
     orderBy: [{ scheduledFor: "asc" }, { position: "asc" }],
     take: 50,

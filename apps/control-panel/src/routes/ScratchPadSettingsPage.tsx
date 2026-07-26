@@ -1,15 +1,69 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { JingleDTO, ScratchPadDTO, ScratchPadSlotDTO } from "@spectado/shared-types";
 import { SCRATCH_PAD_SLOT_COUNT } from "@spectado/shared-types";
 import { apiClient, ApiError } from "../lib/apiClient";
 import { showToast } from "../lib/toastStore";
-
-const selectClass =
-  "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
+import { Modal } from "../components/Modal";
 
 function emptySlots(): ScratchPadSlotDTO[] {
   return Array.from({ length: SCRATCH_PAD_SLOT_COUNT }, (_, position) => ({ position, jingleId: null }));
+}
+
+interface JinglePickerModalProps {
+  position: number;
+  jingles: JingleDTO[];
+  selectedJingleId: string | null;
+  onPick: (jingleId: string | null) => void;
+  onClose: () => void;
+}
+
+function JinglePickerModal({ position, jingles, selectedJingleId, onPick, onClose }: JinglePickerModalProps) {
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return jingles;
+    return jingles.filter((jingle) => jingle.title.toLowerCase().includes(term));
+  }, [jingles, search]);
+
+  return (
+    <Modal title={`Assign button ${position + 1}`} onClose={onClose}>
+      <input
+        type="text"
+        autoFocus
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search jingles…"
+        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+      />
+
+      <div className="mt-3 max-h-80 overflow-y-auto rounded-md border border-slate-200">
+        <button
+          type="button"
+          onClick={() => onPick(null)}
+          className={`block w-full px-3 py-2 text-left text-sm ${
+            selectedJingleId === null ? "bg-slate-900 text-white" : "text-slate-400 hover:bg-slate-50"
+          }`}
+        >
+          — Empty —
+        </button>
+        {filtered.length === 0 && <p className="px-3 py-4 text-center text-sm text-slate-400">No jingles match.</p>}
+        {filtered.map((jingle) => (
+          <button
+            key={jingle.id}
+            type="button"
+            onClick={() => onPick(jingle.id)}
+            className={`block w-full border-t border-slate-100 px-3 py-2 text-left text-sm ${
+              selectedJingleId === jingle.id ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-50"
+            }`}
+          >
+            {jingle.title}
+          </button>
+        ))}
+      </div>
+    </Modal>
+  );
 }
 
 export function ScratchPadSettingsPage() {
@@ -25,6 +79,7 @@ export function ScratchPadSettingsPage() {
   });
 
   const [slots, setSlots] = useState<ScratchPadSlotDTO[]>(emptySlots());
+  const [pickerPosition, setPickerPosition] = useState<number | null>(null);
 
   useEffect(() => {
     if (!query.data) return;
@@ -44,9 +99,12 @@ export function ScratchPadSettingsPage() {
 
   function setSlotJingle(position: number, jingleId: string | null) {
     setSlots((current) => current.map((slot) => (slot.position === position ? { ...slot, jingleId } : slot)));
+    setPickerPosition(null);
   }
 
   const activeJingles = (jinglesQuery.data ?? []).filter((jingle) => jingle.isActive);
+  const jingleById = useMemo(() => new Map(activeJingles.map((jingle) => [jingle.id, jingle])), [activeJingles]);
+  const pickerSlot = pickerPosition !== null ? slots.find((slot) => slot.position === pickerPosition) : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -60,32 +118,41 @@ export function ScratchPadSettingsPage() {
       )}
 
       {query.data && (
-        <div className="max-w-2xl rounded-lg border border-slate-200 bg-white p-6">
+        <div className="rounded-lg border border-slate-200 bg-white p-6">
           <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-400">
             Dashboard buttons
           </h2>
           <p className="mb-4 text-sm text-slate-500">
-            Assign a jingle to each of the 10 Dashboard scratch pad buttons. Leave a slot empty to disable it.
+            Assign a jingle to each of the {SCRATCH_PAD_SLOT_COUNT} Dashboard scratch pad buttons -- click one to
+            change it. Leave a slot empty to disable it.
           </p>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {slots.map((slot) => (
-              <label key={slot.position} className="flex items-center gap-3">
-                <span className="w-6 shrink-0 text-sm font-medium text-slate-400">{slot.position + 1}</span>
-                <select
-                  value={slot.jingleId ?? ""}
-                  onChange={(e) => setSlotJingle(slot.position, e.target.value === "" ? null : e.target.value)}
-                  className={selectClass}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            {slots.map((slot) => {
+              const jingle = slot.jingleId ? jingleById.get(slot.jingleId) : undefined;
+              const isMissing = !!slot.jingleId && !jingle;
+
+              return (
+                <button
+                  key={slot.position}
+                  type="button"
+                  onClick={() => setPickerPosition(slot.position)}
+                  title={jingle?.title}
+                  className={`relative flex h-20 flex-col items-center justify-center overflow-hidden rounded-lg border px-2 py-2 text-center text-xs font-medium transition-colors ${
+                    jingle
+                      ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                      : "border-dashed border-slate-200 bg-slate-50 text-slate-400 hover:bg-slate-100"
+                  }`}
                 >
-                  <option value="">— Empty —</option>
-                  {activeJingles.map((jingle) => (
-                    <option key={jingle.id} value={jingle.id}>
-                      {jingle.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
+                  <span className="absolute left-1.5 top-1.5 text-[10px] font-semibold text-slate-400">
+                    {slot.position + 1}
+                  </span>
+                  <span className="line-clamp-2 wrap-break-word">
+                    {jingle ? jingle.title : isMissing ? "Missing" : "Empty"}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
           <div className="mt-6 flex justify-end">
@@ -99,6 +166,16 @@ export function ScratchPadSettingsPage() {
             </button>
           </div>
         </div>
+      )}
+
+      {pickerPosition !== null && (
+        <JinglePickerModal
+          position={pickerPosition}
+          jingles={activeJingles}
+          selectedJingleId={pickerSlot?.jingleId ?? null}
+          onPick={(jingleId) => setSlotJingle(pickerPosition, jingleId)}
+          onClose={() => setPickerPosition(null)}
+        />
       )}
     </div>
   );

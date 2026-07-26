@@ -162,6 +162,15 @@ clockWheelsRoutes.patch("/:id", async (req, res) => {
   if (!(await validateUpsert({ isActive, slots, steps }, existing.id, res))) return;
 
   const wheel = await prisma.$transaction(async (tx) => {
+    // Cancel (not orphan) any not-yet-played rotation fill from the steps being replaced.
+    // The FK is onDelete: SetNull, so without this, deleting the old steps below would
+    // otherwise leave those ScheduledItem rows dangling -- still scheduledFor-tagged and
+    // still counted as "already covered" by the fill engine's horizon calculation, but no
+    // longer traceable to any wheel/step. The engine regenerates fresh (correctly-tagged)
+    // content from the new steps on its next tick, so nothing is actually lost.
+    await tx.scheduledItem.deleteMany({
+      where: { status: "PENDING", clockWheelStep: { clockWheelId: existing.id } },
+    });
     await tx.clockWheelSlot.deleteMany({ where: { clockWheelId: existing.id } });
     await tx.clockWheelStep.deleteMany({ where: { clockWheelId: existing.id } });
     return tx.clockWheel.update({
@@ -204,6 +213,11 @@ clockWheelsRoutes.delete("/:id", async (req, res) => {
     return;
   }
 
-  await prisma.clockWheel.delete({ where: { id: existing.id } });
+  await prisma.$transaction([
+    // Same reasoning as the PATCH handler -- cancel rather than orphan any not-yet-played
+    // rotation fill from this wheel's steps before the cascade delete removes them.
+    prisma.scheduledItem.deleteMany({ where: { status: "PENDING", clockWheelStep: { clockWheelId: existing.id } } }),
+    prisma.clockWheel.delete({ where: { id: existing.id } }),
+  ]);
   res.status(204).send();
 });

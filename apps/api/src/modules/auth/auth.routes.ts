@@ -68,6 +68,12 @@ authRoutes.post("/refresh", (req, res) => {
   }
 });
 
+authRoutes.post("/logout", (_req, res) => {
+  res.clearCookie("access_token", cookieBase);
+  res.clearCookie("refresh_token", cookieBase);
+  res.status(204).end();
+});
+
 authRoutes.get("/me", requireAuth, async (req, res) => {
   const user = await getAuthUser(req.user!.id);
   if (!user) {

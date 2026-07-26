@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { Prisma, prisma } from "@spectado/database";
-import { ALL_CATEGORY_NAME, CategorySchema, CreateCategoryRequestSchema } from "@spectado/shared-types";
+import {
+  ALL_CATEGORY_NAME,
+  CategorySchema,
+  CreateCategoryRequestSchema,
+  UpdateCategoryRequestSchema,
+} from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 
 export const categoriesRoutes = Router();
@@ -22,6 +27,39 @@ categoriesRoutes.post("/", async (req, res) => {
   try {
     const category = await prisma.category.create({ data: { name: parsed.data.name } });
     res.status(201).json(CategorySchema.parse(category));
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      res.status(409).json({ error: `category "${parsed.data.name}" already exists` });
+      return;
+    }
+    throw err;
+  }
+});
+
+categoriesRoutes.patch("/:id", async (req, res) => {
+  const parsed = UpdateCategoryRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid request", details: parsed.error.issues });
+    return;
+  }
+
+  const category = await prisma.category.findUnique({ where: { id: req.params.id } });
+  if (!category) {
+    res.status(404).json({ error: "category not found" });
+    return;
+  }
+
+  if (category.name === ALL_CATEGORY_NAME) {
+    res.status(400).json({ error: `the "${ALL_CATEGORY_NAME}" category cannot be renamed` });
+    return;
+  }
+
+  try {
+    const updated = await prisma.category.update({
+      where: { id: category.id },
+      data: { name: parsed.data.name },
+    });
+    res.json(CategorySchema.parse(updated));
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       res.status(409).json({ error: `category "${parsed.data.name}" already exists` });

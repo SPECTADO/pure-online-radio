@@ -5,12 +5,13 @@ import { DashboardPage } from "./routes/DashboardPage";
 import { SongsLibraryPage } from "./routes/SongsLibraryPage";
 import { JinglesLibraryPage } from "./routes/JinglesLibraryPage";
 import { AdsLibraryPage } from "./routes/AdsLibraryPage";
+import { CategoriesPage } from "./routes/CategoriesPage";
 import { QueuePage } from "./routes/QueuePage";
 import { SchedulePage } from "./routes/SchedulePage";
 import { ClockWheelsListPage } from "./routes/ClockWheelsListPage";
 import { ClockWheelEditorPage } from "./routes/ClockWheelEditorPage";
 import { ExternalStreamsPage } from "./routes/ExternalStreamsPage";
-import { SeparationRulesPage } from "./routes/SeparationRulesPage";
+import { QueueRulesPage } from "./routes/QueueRulesPage";
 import { StationSettingsPage } from "./routes/StationSettingsPage";
 import { ScratchPadSettingsPage } from "./routes/ScratchPadSettingsPage";
 import { SystemStatusPage } from "./routes/SystemStatusPage";
@@ -27,12 +28,13 @@ export function App() {
           <Route path="library/songs" element={<SongsLibraryPage />} />
           <Route path="library/jingles" element={<JinglesLibraryPage />} />
           <Route path="library/ads" element={<AdsLibraryPage />} />
+          <Route path="library/categories" element={<CategoriesPage />} />
           <Route path="queue" element={<QueuePage />} />
           <Route path="schedule" element={<SchedulePage />} />
           <Route path="clock-wheels" element={<ClockWheelsListPage />} />
           <Route path="clock-wheels/:id" element={<ClockWheelEditorPage />} />
           <Route path="external-streams" element={<ExternalStreamsPage />} />
-          <Route path="settings/separation-rules" element={<SeparationRulesPage />} />
+          <Route path="settings/queue-rules" element={<QueueRulesPage />} />
           <Route path="settings/station" element={<StationSettingsPage />} />
           <Route path="settings/scratch-pad" element={<ScratchPadSettingsPage />} />
           <Route path="system-status" element={<SystemStatusPage />} />

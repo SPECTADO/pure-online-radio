@@ -33,7 +33,29 @@ export function apiUrl(path: string): string {
   return `${getConfig().apiBaseUrl}${path}`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+// Paths that must never trigger a refresh-and-retry: /auth/login 401s mean
+// "bad credentials", not "stale access token", and /auth/refresh is the
+// refresh call itself -- retrying it on its own 401 would recurse forever.
+const REFRESH_EXEMPT_PATHS = new Set(["/auth/login", "/auth/refresh"]);
+
+// Shared in-flight refresh so concurrent 401s (e.g. several queries firing
+// at once after the access token expires) trigger a single /auth/refresh
+// call instead of a stampede of them.
+let refreshPromise: Promise<boolean> | null = null;
+
+function refreshAccessToken(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = fetch(apiUrl("/auth/refresh"), { method: "POST", credentials: "include" })
+      .then((res) => res.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
+async function request<T>(path: string, init?: RequestInit, isRetry = false): Promise<T> {
   const url = apiUrl(path);
 
   const isFormData = init?.body instanceof FormData;
@@ -52,6 +74,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (res.status === 204) {
     return undefined as T;
+  }
+
+  // The access token cookie is short-lived (15m default) but the refresh
+  // token lasts days -- on a 401, silently mint a new access token and
+  // retry once instead of surfacing a spurious "logged out".
+  if (res.status === 401 && !isRetry && !REFRESH_EXEMPT_PATHS.has(path)) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      return request<T>(path, init, true);
+    }
   }
 
   const contentType = res.headers.get("content-type") ?? "";

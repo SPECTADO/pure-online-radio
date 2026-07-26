@@ -16,21 +16,28 @@ stationRoutes.get("/", async (_req, res) => {
   res.json(StationSettingsSchema.parse(toStationSettingsDTO(settings)));
 });
 
+// Genuinely partial: a field left out of the request body keeps its current
+// DB value rather than falling back to a hardcoded default. Needed because
+// the queue-planning horizon is edited from its own form on the Queue Rules
+// page, which only ever sends that one field -- not the full station form.
 stationRoutes.patch("/", stationLogoUpload, async (req, res) => {
+  const existing = await ensureStationSettings();
+
   const parsed = UpdateStationSettingsRequestSchema.safeParse({
-    name: optionalStringField(req.body.name) ?? "",
-    description: req.body.description === "" ? null : optionalStringField(req.body.description) ?? null,
-    links: req.body.links ? JSON.parse(req.body.links) : [],
+    name: optionalStringField(req.body.name) ?? existing.name,
+    description:
+      req.body.description === "" ? null : optionalStringField(req.body.description) ?? existing.description,
+    links: req.body.links ? JSON.parse(req.body.links) : existing.links,
     removeLogo: req.body.removeLogo === "true",
-    timeFormat: optionalStringField(req.body.timeFormat),
-    queuePlanningHorizonMinutes: optionalStringField(req.body.queuePlanningHorizonMinutes),
+    timeFormat: optionalStringField(req.body.timeFormat) ?? existing.timeFormat,
+    queuePlanningHorizonMinutes:
+      optionalStringField(req.body.queuePlanningHorizonMinutes) ?? String(existing.queuePlanningHorizonMinutes),
   });
   if (!parsed.success) {
     res.status(400).json({ error: "invalid request", details: parsed.error.issues });
     return;
   }
 
-  const existing = await ensureStationSettings();
   const data: Prisma.StationSettingsUncheckedUpdateInput = {
     name: parsed.data.name,
     description: parsed.data.description ?? null,

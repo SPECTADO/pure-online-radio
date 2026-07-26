@@ -156,7 +156,7 @@ export function DashboardPage() {
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
       <div className="flex justify-end">
-        <span className="tabular-nums text-sm font-medium text-slate-500">
+        <span className="tabular-nums text-3xl font-semibold text-slate-700">
           {formatTimeOfDay(now, timeFormat)}
         </span>
       </div>
@@ -284,9 +284,9 @@ function UpNextSection({ upNext, moreCount }: { upNext: UpNextDisplayEntry[]; mo
                 </span>
                 {row.kind === "queued" ? (
                   <>
-                    <span className="truncate text-slate-800">{row.entry.title}</span>
+                    <span className="shrink-0 truncate text-slate-800">{row.entry.title}</span>
                     {row.entry.artist && (
-                      <span className="shrink-0 truncate text-slate-400">— {row.entry.artist}</span>
+                      <span className="truncate text-slate-400">— {row.entry.artist}</span>
                     )}
                     {row.entry.scheduleRuleName && <ScheduledTag label="Scheduled" />}
                     {row.entry.clockWheelName && <ScheduledTag label="Rotation" />}
@@ -317,6 +317,15 @@ function UpNextSection({ upNext, moreCount }: { upNext: UpNextDisplayEntry[]; mo
 }
 
 type StatusLabel = "OFF" | "AUTO" | "MANUAL";
+
+function MicIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="h-6 w-6 shrink-0" aria-hidden="true">
+      <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z" />
+      <path d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V20H9a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-2.08A7 7 0 0 0 19 11z" />
+    </svg>
+  );
+}
 
 const STATUS_STYLES: Record<StatusLabel, string> = {
   OFF: "border border-slate-300 bg-white text-black",
@@ -378,10 +387,11 @@ function StatusSection({
           type="button"
           disabled={liveMicBusy}
           onClick={onToggleLiveMic}
-          className={`flex flex-1 items-center justify-center rounded-lg px-6 py-6 text-2xl font-bold tracking-wide transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 ${
+          className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-6 py-6 text-2xl font-bold tracking-wide transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 ${
             isOnAir ? "bg-red-700 text-white" : "bg-slate-200 text-slate-500"
           }`}
         >
+          <MicIcon />
           {isOnAir ? "ON AIR" : "off air"}
         </button>
       </div>

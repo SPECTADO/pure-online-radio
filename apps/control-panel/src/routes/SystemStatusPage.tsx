@@ -4,8 +4,7 @@ import type {
   ComponentHealth,
   ComponentStatusDTO,
   LibraryStatsDTO,
-  MediaKindStatsDTO,
-  StorageKindStatsDTO,
+  QueueStatsDTO,
   StorageStatsDTO,
   SystemStatusDTO,
 } from "@spectado/shared-types";
@@ -47,16 +46,16 @@ export function SystemStatusPage() {
         <>
           <ComponentsSection components={status.components} />
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            {status.queuedItemCount !== null ? (
-              <QueueSection count={status.queuedItemCount} />
+            {status.queue !== null ? (
+              <QueueSection queue={status.queue} />
             ) : (
               <UnavailableSection title="Queue" />
             )}
             <div className="lg:col-span-2">
-              {status.library ? (
-                <LibraryTotalsSection library={status.library} />
+              {status.library || status.storage ? (
+                <LibraryAndStorageSection library={status.library} storage={status.storage} />
               ) : (
-                <UnavailableSection title="Library" />
+                <UnavailableSection title="Library & Storage" />
               )}
             </div>
           </div>
@@ -64,11 +63,6 @@ export function SystemStatusPage() {
             <CategoryBreakdownSection byCategory={status.library.byCategory} />
           ) : (
             <UnavailableSection title="Active items by category" />
-          )}
-          {status.storage ? (
-            <StorageSection storage={status.storage} />
-          ) : (
-            <UnavailableSection title="Storage (MinIO)" />
           )}
         </>
       )}
@@ -112,7 +106,9 @@ function ComponentCard({ component }: { component: ComponentStatusDTO }) {
           {HEALTH_LABELS[component.health]}
         </span>
       </div>
-      <div className="text-sm text-slate-500">Uptime: {formatUptime(component.uptimeSec)}</div>
+      {component.uptimeSec !== null && (
+        <div className="text-sm text-slate-500">Uptime: {formatUptime(component.uptimeSec)}</div>
+      )}
       {component.message && <div className="text-xs text-red-600">{component.message}</div>}
     </div>
   );
@@ -130,39 +126,17 @@ function UnavailableSection({ title }: { title: string }) {
   );
 }
 
-function QueueSection({ count }: { count: number }) {
+function QueueSection({ queue }: { queue: QueueStatsDTO }) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-6">
       <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">Queue</h2>
-      <div className="text-3xl font-semibold tabular-nums text-slate-900">{count}</div>
-      <p className="mt-1 text-sm text-slate-500">item{count === 1 ? "" : "s"} waiting to play</p>
-    </section>
-  );
-}
-
-const LIBRARY_ROWS: { key: keyof LibraryStatsDTO; label: string }[] = [
-  { key: "songs", label: "Songs" },
-  { key: "jingles", label: "Jingles" },
-  { key: "ads", label: "Ads" },
-];
-
-function LibraryTotalsSection({ library }: { library: LibraryStatsDTO }) {
-  return (
-    <section className="rounded-lg border border-slate-200 bg-white p-6">
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">Library</h2>
-      <div className="flex flex-col gap-3">
-        {LIBRARY_ROWS.map((row) => {
-          const stats = library[row.key] as MediaKindStatsDTO;
-          return (
-            <div key={row.key} className="flex items-center justify-between text-sm">
-              <span className="text-slate-700">{row.label}</span>
-              <span className="tabular-nums text-slate-500">
-                <span className="font-medium text-slate-900">{stats.active}</span> active / {stats.total} total
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      <div className="text-3xl font-semibold tabular-nums text-slate-900">{queue.total}</div>
+      <p className="mt-1 text-sm text-slate-500">
+        item{queue.total === 1 ? "" : "s"} queued (due, rotation &amp; manual)
+      </p>
+      <p className="mt-3 text-sm text-slate-500">
+        <span className="font-medium text-slate-900">{queue.manual}</span> manually added
+      </p>
     </section>
   );
 }
@@ -204,21 +178,29 @@ function CategoryBreakdownSection({ byCategory }: { byCategory: CategoryLibraryS
   );
 }
 
-const STORAGE_ROWS: { key: "songs" | "jingles" | "ads"; label: string }[] = [
+const MEDIA_ROWS: { key: "songs" | "jingles" | "ads"; label: string }[] = [
   { key: "songs", label: "Songs" },
   { key: "jingles", label: "Jingles" },
   { key: "ads", label: "Ads" },
 ];
 
-function StorageSection({ storage }: { storage: StorageStatsDTO }) {
+function LibraryAndStorageSection({
+  library,
+  storage,
+}: {
+  library: LibraryStatsDTO | null;
+  storage: StorageStatsDTO | null;
+}) {
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-6">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Storage (MinIO)</h2>
-        <span className="text-sm text-slate-500">
-          <span className="font-medium text-slate-900">{formatBytes(storage.totalBytes)}</span> across{" "}
-          {storage.totalObjectCount} object{storage.totalObjectCount === 1 ? "" : "s"}
-        </span>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Library &amp; Storage</h2>
+        {storage && (
+          <span className="text-sm text-slate-500">
+            <span className="font-medium text-slate-900">{formatBytes(storage.totalBytes)}</span> across{" "}
+            {storage.totalObjectCount} object{storage.totalObjectCount === 1 ? "" : "s"}
+          </span>
+        )}
       </div>
 
       <div className="overflow-hidden rounded-lg border border-slate-200">
@@ -226,21 +208,41 @@ function StorageSection({ storage }: { storage: StorageStatsDTO }) {
           <thead className="bg-slate-50 text-xs uppercase text-slate-500">
             <tr>
               <th className="px-4 py-3">Type</th>
+              <th className="px-4 py-3 text-right">Active / Total</th>
               <th className="px-4 py-3 text-right">Objects</th>
               <th className="px-4 py-3 text-right">Size</th>
               <th className="px-4 py-3 text-right">Share</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {STORAGE_ROWS.map((row) => {
-              const stats = storage[row.key] as StorageKindStatsDTO;
-              const share = storage.totalBytes > 0 ? (stats.totalBytes / storage.totalBytes) * 100 : 0;
+            {MEDIA_ROWS.map((row) => {
+              const libraryStats = library?.[row.key] ?? null;
+              const storageStats = storage?.[row.key] ?? null;
+              const share =
+                storage && storageStats && storage.totalBytes > 0
+                  ? (storageStats.totalBytes / storage.totalBytes) * 100
+                  : null;
               return (
                 <tr key={row.key}>
                   <td className="px-4 py-3 font-medium text-slate-900">{row.label}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-slate-600">{stats.objectCount}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-slate-600">{formatBytes(stats.totalBytes)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-slate-400">{share.toFixed(1)}%</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-slate-500">
+                    {libraryStats ? (
+                      <>
+                        <span className="font-medium text-slate-900">{libraryStats.active}</span> / {libraryStats.total}
+                      </>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-slate-600">
+                    {storageStats ? storageStats.objectCount : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-slate-600">
+                    {storageStats ? formatBytes(storageStats.totalBytes) : "—"}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-slate-400">
+                    {share !== null ? `${share.toFixed(1)}%` : "—"}
+                  </td>
                 </tr>
               );
             })}
@@ -249,8 +251,8 @@ function StorageSection({ storage }: { storage: StorageStatsDTO }) {
       </div>
 
       <p className="mt-3 text-xs text-slate-400">
-        Totals reflect everything in the bucket (including cover art and the station logo), not just the three media
-        types broken out above.
+        Storage totals reflect everything in the bucket (including cover art and the station logo), not just the
+        three media types broken out above.
       </p>
     </section>
   );

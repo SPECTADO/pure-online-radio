@@ -51,6 +51,7 @@ export function QueuePage() {
   const queryClient = useQueryClient();
   const timeFormat = useTimeFormat();
   const [pendingRemove, setPendingRemove] = useState<QueueEntryDTO | null>(null);
+  const [showClearRotation, setShowClearRotation] = useState(false);
 
   const queueQuery = useQuery({
     queryKey: QUEUE_KEY,
@@ -90,13 +91,34 @@ export function QueuePage() {
     [nowPlayingQuery.data, queueQuery.data, upcomingTriggersQuery.data],
   );
 
-  // Only true manual (unscheduled) items are draggable -- due schedule-fired items and
-  // not-yet-fired previews are read-only, positioned wherever their expected time falls.
+  // Manual (unscheduled) items and clock-wheel rotation fills are each independently
+  // reorderable (within their own pool only -- see the reorder endpoint's `scope`); due
+  // schedule-fired items and not-yet-fired previews are read-only, positioned wherever
+  // their expected time falls.
   const manualRows = useMemo(
     () => mergedList.filter((row): row is QueuedRow => row.kind === "queued" && row.entry.scheduledFor === null),
     [mergedList],
   );
   const manualEntries = useMemo(() => manualRows.map((row) => row.entry), [manualRows]);
+
+  const rotationRows = useMemo(
+    () =>
+      mergedList.filter(
+        (row): row is QueuedRow => row.kind === "queued" && row.entry.scheduledFor !== null && row.entry.clockWheelName !== null,
+      ),
+    [mergedList],
+  );
+  const rotationEntries = useMemo(() => rotationRows.map((row) => row.entry), [rotationRows]);
+
+  // Combined, in-render-order set of every draggable id -- dnd-kit's SortableContext
+  // needs this to match visual order for correct drag animations/keyboard nav.
+  const draggableRows = useMemo(
+    () =>
+      mergedList.filter(
+        (row): row is QueuedRow => row.kind === "queued" && (row.entry.scheduledFor === null || row.entry.clockWheelName !== null),
+      ),
+    [mergedList],
+  );
 
   const queuedRows = mergedList.filter((row): row is QueuedRow => row.kind === "queued");
   const lastQueuedRow = queuedRows[queuedRows.length - 1];
@@ -118,26 +140,56 @@ export function QueuePage() {
     },
   });
 
+  // Bulk-removes every clock-wheel-filled item -- the engine regenerates fresh rotation
+  // content on its next tick, so this reads as "start the rotation over", not a lasting gap.
+  const clearRotationMutation = useMutation({
+    mutationFn: () => apiClient.delete<{ removed: number }>("/queue/rotation"),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: QUEUE_KEY });
+      showToast("success", `Removed ${result.removed} rotation item${result.removed === 1 ? "" : "s"} from the queue`);
+      setShowClearRotation(false);
+    },
+    onError: (err) => {
+      showToast(
+        "error",
+        `Couldn't clear rotation items: ${err instanceof ApiError ? err.message : "request failed"}`,
+      );
+    },
+  });
+
+  type ReorderScope = "manual" | "rotation";
+  const isDue = (item: QueueEntryDTO) => item.scheduledFor !== null && item.clockWheelName === null;
+  const isManual = (item: QueueEntryDTO) => item.scheduledFor === null;
+  const isRotation = (item: QueueEntryDTO) => item.scheduledFor !== null && item.clockWheelName !== null;
+
   const reorderMutation = useMutation({
-    mutationFn: (orderedIds: string[]) => apiClient.patch("/queue/items/reorder", { orderedIds }),
+    mutationFn: ({ scope, orderedIds }: { scope: ReorderScope; orderedIds: string[] }) =>
+      apiClient.patch("/queue/items/reorder", { scope, orderedIds }),
     // Reorder the cached list immediately so a drag-drop lands exactly where it was dropped
-    // instead of snapping back until the request round-trips. The cache can also contain due
-    // (scheduledFor set) items now, which aren't part of `orderedIds` -- keep those in place and
-    // only rewrite the manual (scheduledFor: null) slice.
-    onMutate: async (orderedIds) => {
+    // instead of snapping back until the request round-trips. The cache also holds due
+    // (scheduledFor set, not clock-wheel) items, which are never part of `orderedIds` -- keep
+    // those in place and only rewrite the pool (manual or rotation) actually being reordered,
+    // reassembled in the same [due, manual, rotation] order the server itself returns.
+    onMutate: async ({ scope, orderedIds }) => {
       await queryClient.cancelQueries({ queryKey: QUEUE_KEY });
       const previous = queryClient.getQueryData<QueueEntryDTO[]>(QUEUE_KEY);
       if (previous) {
-        const due = previous.filter((item) => item.scheduledFor !== null);
-        const manualById = new Map(previous.filter((item) => item.scheduledFor === null).map((item) => [item.id, item]));
-        const reorderedManual = orderedIds
-          .map((id) => manualById.get(id))
+        const due = previous.filter(isDue);
+        const manual = previous.filter(isManual);
+        const rotation = previous.filter(isRotation);
+        const pool = scope === "manual" ? manual : rotation;
+        const poolById = new Map(pool.map((item) => [item.id, item]));
+        const reorderedPool = orderedIds
+          .map((id) => poolById.get(id))
           .filter((item): item is QueueEntryDTO => item !== undefined);
-        queryClient.setQueryData<QueueEntryDTO[]>(QUEUE_KEY, [...due, ...reorderedManual]);
+        queryClient.setQueryData<QueueEntryDTO[]>(
+          QUEUE_KEY,
+          scope === "manual" ? [...due, ...reorderedPool, ...rotation] : [...due, ...manual, ...reorderedPool],
+        );
       }
       return { previous };
     },
-    onError: (err, _orderedIds, context) => {
+    onError: (err, _vars, context) => {
       if (context?.previous) queryClient.setQueryData(QUEUE_KEY, context.previous);
       showToast(
         "error",
@@ -147,9 +199,9 @@ export function QueuePage() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: QUEUE_KEY }),
   });
 
-  function reorderTo(items: QueueEntryDTO[], fromIndex: number, toIndex: number) {
+  function reorderTo(scope: ReorderScope, items: QueueEntryDTO[], fromIndex: number, toIndex: number) {
     if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || toIndex >= items.length) return;
-    reorderMutation.mutate(arrayMove(items, fromIndex, toIndex).map((item) => item.id));
+    reorderMutation.mutate({ scope, orderedIds: arrayMove(items, fromIndex, toIndex).map((item) => item.id) });
   }
 
   const sensors = useSensors(
@@ -159,7 +211,7 @@ export function QueuePage() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
   const [activeId, setActiveId] = useState<string | null>(null);
-  const activeRow = manualRows.find((row) => row.entry.id === activeId) ?? null;
+  const activeRow = draggableRows.find((row) => row.entry.id === activeId) ?? null;
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(String(event.active.id));
@@ -169,23 +221,43 @@ export function QueuePage() {
     setActiveId(null);
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = manualEntries.findIndex((item) => item.id === active.id);
-    const newIndex = manualEntries.findIndex((item) => item.id === over.id);
-    reorderTo(manualEntries, oldIndex, newIndex);
+
+    const activeEntry = draggableRows.find((row) => row.entry.id === active.id)?.entry;
+    const overEntry = draggableRows.find((row) => row.entry.id === over.id)?.entry;
+    if (!activeEntry || !overEntry) return;
+
+    // Dragging across pools (manual <-> rotation) is a no-op -- the claim priority between
+    // them is fixed regardless of position, so "moving" a rotation item above a manual one
+    // wouldn't actually change playback order and would just be misleading.
+    const activeScope: ReorderScope = isManual(activeEntry) ? "manual" : "rotation";
+    const overScope: ReorderScope = isManual(overEntry) ? "manual" : "rotation";
+    if (activeScope !== overScope) return;
+
+    const poolEntries = activeScope === "manual" ? manualEntries : rotationEntries;
+    const oldIndex = poolEntries.findIndex((item) => item.id === active.id);
+    const newIndex = poolEntries.findIndex((item) => item.id === over.id);
+    reorderTo(activeScope, poolEntries, oldIndex, newIndex);
   }
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-slate-900">Queue</h1>
-        {plannedTillMs !== null && (
-          <span className="text-sm text-slate-500">
-            Planned till{" "}
-            <span className="tabular-nums font-medium text-slate-700">
-              {formatTimeOfDay(plannedTillMs, timeFormat)}
+        <div className="flex items-center gap-4">
+          {plannedTillMs !== null && (
+            <span className="text-sm text-slate-500">
+              Planned till{" "}
+              <span className="tabular-nums font-medium text-slate-700">
+                {formatTimeOfDay(plannedTillMs, timeFormat)}
+              </span>
             </span>
-          </span>
-        )}
+          )}
+          {rotationEntries.length > 0 && (
+            <button type="button" onClick={() => setShowClearRotation(true)} className={rowActionButtonDanger}>
+              Clear rotation
+            </button>
+          )}
+        </div>
       </div>
 
       <QuickAddSection />
@@ -229,7 +301,10 @@ export function QueuePage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                <SortableContext items={manualEntries.map((item) => item.id)} strategy={verticalListSortingStrategy}>
+                <SortableContext
+                  items={draggableRows.map((row) => row.entry.id)}
+                  strategy={verticalListSortingStrategy}
+                >
                   {mergedList.map((row, index) => {
                     const countdownMs = index === 0 ? firstItemCountdownMs : null;
                     if (row.kind === "queued" && row.entry.scheduledFor === null) {
@@ -240,6 +315,19 @@ export function QueuePage() {
                           expectedAt={row.expectedAt}
                           timeFormat={timeFormat}
                           countdownMs={countdownMs}
+                          onRemove={() => setPendingRemove(row.entry)}
+                        />
+                      );
+                    }
+                    if (row.kind === "queued" && row.entry.clockWheelName !== null) {
+                      return (
+                        <ManualQueueRow
+                          key={row.key}
+                          entry={row.entry}
+                          expectedAt={row.expectedAt}
+                          timeFormat={timeFormat}
+                          countdownMs={countdownMs}
+                          tagLabel="Rotation"
                           onRemove={() => setPendingRemove(row.entry)}
                         />
                       );
@@ -255,7 +343,7 @@ export function QueuePage() {
                           artist={row.entry.artist}
                           mediaKind={row.entry.mediaKind}
                           durationMs={row.entry.durationMs}
-                          tagLabel={row.entry.scheduleRuleName ? "Scheduled" : "Rotation"}
+                          tagLabel="Scheduled"
                           onRemove={() => setPendingRemove(row.entry)}
                         />
                       );
@@ -333,6 +421,37 @@ export function QueuePage() {
           </div>
         </Modal>
       )}
+
+      {showClearRotation && (
+        <Modal title="Clear rotation" onClose={() => setShowClearRotation(false)}>
+          <p className="text-sm text-slate-600">
+            Remove all {rotationEntries.length} clock-wheel-filled item{rotationEntries.length === 1 ? "" : "s"} from
+            the queue? The rotation will refill on its own shortly after.
+          </p>
+          {clearRotationMutation.isError && (
+            <p className="mt-2 text-sm text-red-600">
+              {clearRotationMutation.error instanceof Error ? clearRotationMutation.error.message : "Clear failed"}
+            </p>
+          )}
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowClearRotation(false)}
+              className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => clearRotationMutation.mutate()}
+              disabled={clearRotationMutation.isPending}
+              className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+            >
+              {clearRotationMutation.isPending ? "Clearing…" : "Clear rotation"}
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -361,12 +480,14 @@ function ManualQueueRow({
   expectedAt,
   timeFormat,
   countdownMs,
+  tagLabel,
   onRemove,
 }: {
   entry: QueueEntryDTO;
   expectedAt: number;
   timeFormat: TimeFormat;
   countdownMs: number | null;
+  tagLabel?: string;
   onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
@@ -390,8 +511,13 @@ function ManualQueueRow({
         </div>
       </td>
       <td className="px-4 py-3 font-medium text-slate-900">
-        {entry.title}
-        {entry.artist && <span className="ml-2 font-normal text-slate-500">{entry.artist}</span>}
+        <div className="flex items-center gap-2">
+          <span>
+            {entry.title}
+            {entry.artist && <span className="ml-2 font-normal text-slate-500">{entry.artist}</span>}
+          </span>
+          {tagLabel && <ScheduledTag label={tagLabel} />}
+        </div>
       </td>
       <td className="px-4 py-3">
         <MediaKindBadge kind={entry.mediaKind} />

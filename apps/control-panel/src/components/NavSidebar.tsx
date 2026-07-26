@@ -30,6 +30,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/library/songs", label: "Songs Library" },
       { to: "/library/jingles", label: "Jingles Library" },
       { to: "/library/ads", label: "Ads Library" },
+      { to: "/library/categories", label: "Categories" },
     ],
   },
   {
@@ -44,7 +45,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Settings",
     children: [
       { to: "/settings/station", label: "Station Settings" },
-      { to: "/settings/separation-rules", label: "Separation Rules" },
+      { to: "/settings/queue-rules", label: "Queue Rules" },
       { to: "/settings/scratch-pad", label: "Scratch Pad" },
     ],
   },

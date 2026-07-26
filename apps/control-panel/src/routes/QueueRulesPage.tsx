@@ -1,6 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { SeparationRulesDTO } from "@spectado/shared-types";
+import type { SeparationRulesDTO, StationSettingsDTO } from "@spectado/shared-types";
 import { apiClient, ApiError } from "../lib/apiClient";
 import { showToast } from "../lib/toastStore";
 import { ComingSoon } from "../components/ComingSoon";
@@ -11,7 +11,92 @@ const inputClass =
   "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
 const labelClass = "mb-1 block text-sm font-medium text-slate-700";
 
-export function SeparationRulesPage() {
+const STATION_KEY = ["settings", "station"];
+
+function QueuePlanningSection() {
+  const timeFormat = useTimeFormat();
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: STATION_KEY,
+    queryFn: () => apiClient.get<StationSettingsDTO>("/settings/station"),
+  });
+
+  const [horizonMinutes, setHorizonMinutes] = useState(240);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!query.data) return;
+    setHorizonMinutes(query.data.queuePlanningHorizonMinutes);
+  }, [query.data]);
+
+  const updateMutation = useMutation({
+    mutationFn: (minutes: number) =>
+      apiClient.patch<StationSettingsDTO>("/settings/station", {
+        queuePlanningHorizonMinutes: String(minutes),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: STATION_KEY });
+      showToast("success", "Queue planning saved");
+    },
+    onError: (err) => {
+      const message = err instanceof ApiError ? err.message : "Update failed";
+      setError(message);
+      showToast("error", `Couldn't save queue planning: ${message}`);
+    },
+  });
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    updateMutation.mutate(horizonMinutes);
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-6">
+      <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">Queue Planning</h2>
+
+      {query.isLoading && <p className="text-sm text-slate-500">Loading…</p>}
+      {query.isError && (
+        <div className="rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">
+          Couldn't load queue planning: {(query.error as Error).message}
+        </div>
+      )}
+
+      {query.data && (
+        <form onSubmit={handleSubmit}>
+          <label>
+            <span className={labelClass}>Plan the queue ahead by (minutes)</span>
+            <input
+              type="number"
+              min={1}
+              value={horizonMinutes}
+              onChange={(e) => setHorizonMinutes(Number(e.target.value))}
+              className={`max-w-xs ${inputClass}`}
+            />
+          </label>
+          <p className="mt-1 text-xs text-slate-400">
+            How far ahead the clock wheel keeps the queue filled -- e.g. 240 = 4 hours.
+          </p>
+
+          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
+            <span className="text-xs text-slate-400">Last updated {formatDateTime(query.data.updatedAt, timeFormat)}</span>
+            <button
+              type="submit"
+              disabled={updateMutation.isPending}
+              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {updateMutation.isPending ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+
+          {error && <div className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        </form>
+      )}
+    </div>
+  );
+}
+
+function SeparationRulesSection() {
   const timeFormat = useTimeFormat();
   const queryClient = useQueryClient();
   const query = useQuery({
@@ -55,8 +140,11 @@ export function SeparationRulesPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold text-slate-900">Separation Rules</h1>
+    <div className="rounded-lg border border-slate-200 bg-white p-6">
+      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-400">Separation Rules</h2>
+      <p className="mb-4 text-xs text-slate-500">
+        Minimum time before the clock-wheel rotation is allowed to repeat the same artist, album, or exact track.
+      </p>
 
       {query.isLoading && <p className="text-sm text-slate-500">Loading…</p>}
 
@@ -74,12 +162,7 @@ export function SeparationRulesPage() {
       )}
 
       {query.data && (
-        <form onSubmit={handleSubmit} className="max-w-md rounded-lg border border-slate-200 bg-white p-6">
-          <p className="mb-4 text-xs text-slate-500">
-            Minimum time before the clock-wheel rotation is allowed to repeat the same artist, album, or exact
-            track.
-          </p>
-
+        <form onSubmit={handleSubmit}>
           <div className="flex flex-col gap-4">
             <label>
               <span className={labelClass}>Artist separation (minutes)</span>
@@ -127,6 +210,19 @@ export function SeparationRulesPage() {
           {error && <div className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
         </form>
       )}
+    </div>
+  );
+}
+
+export function QueueRulesPage() {
+  return (
+    <div className="flex flex-col gap-6">
+      <h1 className="text-2xl font-semibold text-slate-900">Queue Rules</h1>
+
+      <div className="flex max-w-md flex-col gap-6">
+        <QueuePlanningSection />
+        <SeparationRulesSection />
+      </div>
     </div>
   );
 }
