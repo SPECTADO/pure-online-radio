@@ -6,7 +6,7 @@ export const PickRuleSchema = z.object({
   order: z.number().int().nonnegative(),
   mediaKind: MediaKindSchema,
   selectionStrategy: SelectionStrategySchema,
-  categoryId: z.string().nullable(), // required in practice when mediaKind = SONG
+  categoryId: z.string().nullable(), // null = all categories
   tag: z.string().nullable(),
 });
 export type PickRuleDTO = z.infer<typeof PickRuleSchema>;
@@ -23,6 +23,9 @@ export const ClockWheelSchema = z.object({
   id: z.string(),
   name: z.string(),
   isActive: z.boolean(),
+  // Server-computed; exactly one wheel has this true (the required fallback). Absent
+  // from UpsertClockWheelRequestSchema below -- it's never client-settable.
+  isDefault: z.boolean(),
   slots: z.array(ClockWheelSlotSchema),
   steps: z.array(PickRuleSchema),
 });
@@ -32,6 +35,8 @@ export const UpsertClockWheelRequestSchema = z.object({
   name: z.string().min(1),
   isActive: z.boolean().default(true),
   slots: z.array(ClockWheelSlotSchema.omit({ id: true })),
-  steps: z.array(PickRuleSchema.omit({ id: true })),
+  // order is always derived from array position server-side, same convention as
+  // ScheduleRuleItem in UpsertScheduleRuleRequestSchema -- never client-submitted.
+  steps: z.array(PickRuleSchema.omit({ id: true, order: true })),
 });
 export type UpsertClockWheelRequestDTO = z.infer<typeof UpsertClockWheelRequestSchema>;

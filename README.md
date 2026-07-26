@@ -6,10 +6,11 @@ queue, jingles, live mic input, and external stream relays. Everything runs as a
 
 > **Status:** this repository is currently a **scaffold**. The full infrastructure, data model, and service wiring
 > are real and verified working end-to-end (see [Implementation status](#implementation-status)). The manual
-> playback queue, standalone jingle overlay, and the Schedule/External Streams feature (recurring/one-off
-> song-jingle-ad blocks and relay triggers, real scheduler + NATS commands) are now real too — most of what's left
-> stubbed is clock wheels, live mic mixing, and the encoder's actual external-relay audio decode. See that section
-> before assuming a feature works.
+> playback queue, standalone jingle overlay, the Schedule/External Streams feature (recurring/one-off
+> song-jingle-ad blocks and relay triggers, real scheduler + NATS commands), and Clock Wheels (automatic queue
+> filling from day/time rotation rules, with separation-rule enforcement) are now real too — most of what's left
+> stubbed is live mic mixing and the encoder's actual external-relay audio decode. See that section before assuming
+> a feature works.
 
 ## Contents
 
@@ -34,11 +35,14 @@ queue, jingles, live mic input, and external stream relays. Everything runs as a
    advance — at boot, when the current item finishes, on an explicit skip/start, or after a short retry delay while
    the queue is empty. That resolves, in priority order: any due **Schedule** items (real — a recurring/one-off
    song-jingle-ad block fired by its rule, see below) ahead of the **manual queue** (a manager adds any song/jingle/ad
-   to a simple FIFO — search on the Queue page, or an "Add to queue" button in each library page); both drain
-   one item after another in the same way. (Clock-wheel/separation-rule resolution — automatically filling the
-   queue from rotation rules instead of manual/scheduled adds — is still a stub, see below.) The result is a signed,
-   time-limited MinIO URL the encoder decodes directly via ffmpeg — it never holds storage credentials itself. When
-   the queue is empty, the encoder falls back to real silence (not a filler tone).
+   to a simple FIFO — search on the Queue page, or an "Add to queue" button in each library page), ahead of
+   **Clock Wheel** rotation fill (real — a background scheduler tick keeps the queue planned
+   `queuePlanningHorizonMinutes` ahead by picking whichever day/time-matched wheel is active, cycling through its
+   ordered pick-rule steps, and selecting concrete media per step's category/tag filter, selection strategy, and the
+   global artist/album/song separation rules — falling back to the one required Default wheel for any time no other
+   active wheel's slot matches). All three tiers drain from the same underlying queue table, one item after another.
+   The result is a signed, time-limited MinIO URL the encoder decodes directly via ffmpeg — it never holds storage
+   credentials itself. When the queue is empty, the encoder falls back to real silence (not a filler tone).
 3. **Encoding**: the encoder mixes whatever should currently be audible (queue track, jingle overlay, live mic
    overlay, or an external relay) into a single continuous PCM bus, which a persistent ffmpeg process encodes into
    two HLS variants (low/high bitrate AAC) written to a shared volume.
@@ -166,9 +170,11 @@ erDiagram
 
     Song |o--o{ PlaybackHistoryEntry : plays
     Jingle |o--o{ PlaybackHistoryEntry : plays
+    Ad |o--o{ PlaybackHistoryEntry : plays
     ExternalStream |o--o{ PlaybackHistoryEntry : plays
     ScheduledItem |o--o{ PlaybackHistoryEntry : plays
     ClockWheelStep |o--o{ PlaybackHistoryEntry : "picked via"
+    ClockWheelStep |o--o{ ScheduledItem : "fills (clock-wheel rotation)"
 
     ClockWheel ||--o{ ClockWheelSlot : schedules
     ClockWheel ||--o{ ClockWheelStep : contains
@@ -231,6 +237,7 @@ erDiagram
         string adId FK
         ScheduledItemStatus status
         string scheduleRuleId FK
+        string clockWheelStepId FK
         string createdById FK
         datetime playedAt
     }
@@ -256,6 +263,8 @@ erDiagram
         string id PK
         string name
         boolean isActive
+        boolean isDefault
+        int rotationCursor
     }
 
     ClockWheelSlot {
@@ -281,6 +290,7 @@ erDiagram
         SeparationRuleScope scope
         string clockWheelId FK
         int artistSeparationMinutes
+        int albumSeparationMinutes
         int songSeparationMinutes
         string updatedById FK
     }
@@ -292,6 +302,7 @@ erDiagram
         string logoKey
         json links
         string timeFormat
+        int queuePlanningHorizonMinutes
         string updatedById FK
     }
 
@@ -318,6 +329,7 @@ erDiagram
         PlaybackMediaKind mediaKind
         string songId FK
         string jingleId FK
+        string adId FK
         string externalStreamId FK
         PlaybackSource source
         string clockWheelStepId FK
@@ -520,8 +532,9 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   cover image can be uploaded/replaced separately. Categories are user-defined and many-to-many (a song/jingle
   can belong to several); every song and jingle is always additionally attached to the fixed "ALL" category,
   and ads are _only_ ever attached to "ALL" (no user choice — see `ads.routes.ts`). Ads additionally carry a
-  mandatory `activeFrom`/`activeUntil` window in the schema, enforced by request validation, though nothing
-  downstream (queue resolution, below) reads it yet since that's still a stub. Song metadata can also be
+  mandatory `activeFrom`/`activeUntil` window in the schema, enforced by request validation and by the clock-wheel
+  fill engine (below), which excludes an ad from an AD-kind step's candidates outside its active window. Song
+  metadata can also be
   looked up externally via MusicBrainz + the Cover Art Archive (free, no API key) and applied with one click —
   see `apps/api/src/modules/library/metadataProviders/musicBrainzProvider.ts` for why that provider was picked
   and what's deliberately not built (audio-fingerprint auto-identification via AcoustID/Chromaprint).
@@ -549,14 +562,30 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   computed correctly for `AFTER_DURATION`, and the forced `relayStop` fires exactly on schedule). The encoder
   receiving and acknowledging these commands is real; it decoding the relay URL into actual audio is not (see
   Stubbed, below) — that's a separate, pre-existing gap in the audio pipeline, not in the scheduling logic.
+- **Clock Wheels** (`ClockWheel`/`ClockWheelSlot`/`ClockWheelStep`) — the lowest-priority queue-fill tier: one
+  required **Default** wheel (seeded, never deletable, no day/time window of its own) plus any number of
+  manager-defined wheels, each with one or more weekday+time-range slots (midnight-wraparound slots handled, e.g. a
+  22:00–06:00 night show) and an ordered rotation of pick-rule steps (song/jingle/ad, an optional category-or-all
+  and tag filter, and a selection strategy — `RANDOM`, `LEAST_RECENTLY_PLAYED`, or `WEIGHTED_RECENCY`, written as a
+  dispatch table so more strategies can be added later). Full CRUD (`apps/api/src/modules/clockWheels/`) rejects
+  overlapping slots between active, non-default wheels so at most one ever matches a given moment. Every 15s
+  scheduler tick (`apps/api/src/scheduler/clockWheelEngine.ts`) keeps the queue filled
+  `queuePlanningHorizonMinutes` ahead (Settings → Station Settings, default 4h): it picks the wheel active at each
+  estimated future moment, cycles that wheel's steps via a persisted `rotationCursor`, and selects concrete media
+  respecting the **Separation Rules** (Settings → Separation Rules: artist/album/song minimums, checked against
+  both real playback history and whatever the engine has already planned later in the same fill pass — not just
+  past plays — progressively relaxed if nothing survives, so a slot is never left unfilled just because rotation
+  variety can't be perfectly honored). `internal/playback/next`'s claim now has 3 tiers — due Schedule items, then
+  the manual queue, then clock-wheel fill — the clock-wheel tier claimed strictly FIFO rather than gated on its
+  estimated time, so real playback drift (skips, interruptions) can never open a silence gap. `PlaybackHistoryEntry`
+  is now actually written (at claim time, for every source) — the durable log the separation rules and
+  `LEAST_RECENTLY_PLAYED`/`WEIGHTED_RECENCY` strategies read from. The Clock Wheels page shows a visual weekly
+  grid of which wheel is active when (default wheel as the base fill color, specific wheels as colored blocks);
+  the Queue/Dashboard "Up Next" views tag clock-wheel-filled rows "Rotation" to distinguish them from manual/
+  scheduled items.
 
 **Stubbed (real routes/modules exist, but return placeholder data or `501 Not Implemented`):**
 
-- Automatic queue resolution from rotation rules (clock wheel → separation rules → fallback category) — the manual
-  queue and Schedule above are both real, but nothing yet auto-_fills_ the queue from a clock wheel or enforces
-  separation rules; an ad's `activeFrom`/`activeUntil` window is likewise only enforced at upload/edit time, not
-  when adding to the queue.
-- Clock wheels CRUD.
 - Live mic mixing, external relay audio decode in the encoder (`apps/encoder/src/sources/relaySource.ts`,
   `controllers/relayController.ts`) — correct interfaces/state machines exist, and `relayController` now receives
   correctly-shaped `relay.start`/`relay.stop`/`relay.cancel` commands (see External Streams, above), but doesn't yet

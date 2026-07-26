@@ -1,4 +1,5 @@
 import { logger } from "../logger.js";
+import { evaluateClockWheelFill } from "./clockWheelEngine.js";
 import { SCHEDULER_TICK_MS } from "./constants.js";
 import { evaluateExternalStreams } from "./externalStreamScheduler.js";
 import { evaluateScheduleRules } from "./scheduleRuleScheduler.js";
@@ -13,6 +14,9 @@ export function startScheduler(): NodeJS.Timeout {
     });
     evaluateExternalStreams(now).catch((err: unknown) => {
       logger.error({ err }, "external stream evaluation tick failed");
+    });
+    evaluateClockWheelFill(now).catch((err: unknown) => {
+      logger.error({ err }, "clock wheel fill tick failed");
     });
   }, SCHEDULER_TICK_MS);
 }

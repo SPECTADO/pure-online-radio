@@ -31,7 +31,7 @@ const QUEUE_KEY = ["queue"];
 const UPCOMING_TRIGGERS_KEY = ["queue", "upcoming-triggers"];
 const JINGLES_KEY = ["library", "jingles"];
 const SCRATCH_PAD_KEY = ["settings", "scratch-pad"];
-const UPCOMING_COUNT = 5;
+const UP_NEXT_WINDOW_MS = 60 * 60 * 1000;
 
 interface CurrentJingle {
   jingleId: string;
@@ -147,8 +147,11 @@ export function DashboardPage() {
     () => buildUpNextList(nowPlaying, queueQuery.data ?? [], upcomingTriggersQuery.data ?? []),
     [nowPlaying, queueQuery.data, upcomingTriggersQuery.data],
   );
-  const upNext = upNextAll.slice(0, UPCOMING_COUNT);
-  const upNextMoreCount = Math.max(0, upNextAll.length - UPCOMING_COUNT);
+  const upNext = useMemo(
+    () => upNextAll.filter((row) => row.expectedAt <= now + UP_NEXT_WINDOW_MS),
+    [upNextAll, now],
+  );
+  const upNextMoreCount = upNextAll.length - upNext.length;
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -168,7 +171,6 @@ export function DashboardPage() {
             skipDisabled={skipMutation.isPending}
           />
           <UpNextSection upNext={upNext} moreCount={upNextMoreCount} />
-          <QuickAddSection />
         </div>
 
         <div className="flex flex-col gap-6">
@@ -195,6 +197,7 @@ export function DashboardPage() {
             playPending={playJingleMutation.isPending}
             stopPending={stopJingleMutation.isPending}
           />
+          <QuickAddSection />
         </div>
       </div>
     </div>
@@ -286,6 +289,7 @@ function UpNextSection({ upNext, moreCount }: { upNext: UpNextDisplayEntry[]; mo
                       <span className="shrink-0 truncate text-slate-400">— {row.entry.artist}</span>
                     )}
                     {row.entry.scheduleRuleName && <ScheduledTag label="Scheduled" />}
+                    {row.entry.clockWheelName && <ScheduledTag label="Rotation" />}
                     <span className="ml-auto shrink-0">
                       <MediaKindBadge kind={row.entry.mediaKind} />
                     </span>

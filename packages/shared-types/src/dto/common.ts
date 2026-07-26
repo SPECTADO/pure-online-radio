@@ -6,7 +6,7 @@ export type Role = z.infer<typeof RoleSchema>;
 export const MediaKindSchema = z.enum(["SONG", "JINGLE", "AD"]);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
 
-export const SelectionStrategySchema = z.enum(["RANDOM", "LEAST_OFTEN_PLAYED"]);
+export const SelectionStrategySchema = z.enum(["RANDOM", "LEAST_RECENTLY_PLAYED", "WEIGHTED_RECENCY"]);
 export type SelectionStrategy = z.infer<typeof SelectionStrategySchema>;
 
 export const JingleTypeSchema = z.enum([

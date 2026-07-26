@@ -33,11 +33,26 @@ async function main() {
       id: "global",
       scope: "GLOBAL",
       artistSeparationMinutes: 60,
+      albumSeparationMinutes: 90,
       songSeparationMinutes: 120,
     },
   });
 
-  console.log(`Seeded admin user "${username}", "ALL" category, and global separation rule.`);
+  // The one required fallback wheel -- fills any time no other active wheel's slot
+  // matches. Can be edited (steps only, see clockWheels.routes.ts) but never deleted,
+  // so it's seeded once here rather than created through the API.
+  await prisma.clockWheel.upsert({
+    where: { id: "default" },
+    update: {},
+    create: {
+      id: "default",
+      name: "Default",
+      isActive: true,
+      isDefault: true,
+    },
+  });
+
+  console.log(`Seeded admin user "${username}", "ALL" category, global separation rule, and default clock wheel.`);
 }
 
 main()

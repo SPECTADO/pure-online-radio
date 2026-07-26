@@ -17,6 +17,9 @@ export const QueueEntrySchema = z.object({
   // Denormalized, same convention as title/artist -- null for a manually-queued or
   // ad-hoc one-off item; set when this row was materialized by a ScheduleRule firing.
   scheduleRuleName: z.string().nullable(),
+  // Denormalized, same convention -- set when this row was materialized by the
+  // clock-wheel fill engine instead (see apps/api/src/scheduler/clockWheelEngine.ts).
+  clockWheelName: z.string().nullable(),
 });
 export type QueueEntryDTO = z.infer<typeof QueueEntrySchema>;
 

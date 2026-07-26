@@ -33,6 +33,9 @@ export const StationSettingsSchema = z.object({
   // Station-wide display preference (not per-manager) -- read by every clock
   // time shown in the control panel, e.g. lib/format.ts's formatTimeOfDay.
   timeFormat: TimeFormatSchema,
+  // How far ahead the clock-wheel fill engine keeps the queue planned -- see
+  // apps/api/src/scheduler/clockWheelEngine.ts.
+  queuePlanningHorizonMinutes: z.number().int().positive(),
   updatedAt: z.string().datetime(),
 });
 export type StationSettingsDTO = z.infer<typeof StationSettingsSchema>;
@@ -43,5 +46,6 @@ export const UpdateStationSettingsRequestSchema = z.object({
   links: z.array(StationLinkSchema),
   removeLogo: z.boolean().optional(),
   timeFormat: TimeFormatSchema.default("12h"),
+  queuePlanningHorizonMinutes: z.coerce.number().int().positive().default(240),
 });
 export type UpdateStationSettingsRequestDTO = z.infer<typeof UpdateStationSettingsRequestSchema>;

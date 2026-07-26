@@ -21,6 +21,12 @@ type ClaimedItem = Prisma.ScheduledItemGetPayload<{ include: typeof claimInclude
 
 const TRACK_URL_BUFFER_SECONDS = 120;
 
+const PLAYBACK_MEDIA_KIND: Record<ClaimedItem["mediaKind"], "SONG" | "JINGLE" | "AD"> = {
+  SONG: "SONG",
+  JINGLE: "JINGLE",
+  AD: "AD",
+};
+
 /**
  * Atomically pops the next item to play and marks it PLAYED. There is no
  * separate "now playing" queue-row state (ScheduledItemStatus has no
@@ -30,31 +36,73 @@ const TRACK_URL_BUFFER_SECONDS = 120;
  * invoke this (the encoder's own advance-driven fetch) since it has a real
  * side effect -- see apps/encoder/src/api/apiClient.ts.
  *
- * Due schedule-block items (`scheduledFor <= now`, materialized by a
- * ScheduleRule firing -- see apps/api/src/scheduler/) always outrank the
- * manual queue (`scheduledFor: null`); the manual queue is only drained once
- * nothing is due.
+ * Claim priority: due schedule-block items (`scheduledFor <= now`,
+ * materialized by a ScheduleRule firing -- see apps/api/src/scheduler/) outrank
+ * the manual queue (`scheduledFor: null`), which outranks clock-wheel-filled
+ * items (`clockWheelStepId` set -- see apps/api/src/scheduler/clockWheelEngine.ts).
+ * The clock-wheel tier is claimed strictly FIFO by `position`, deliberately NOT
+ * gated on `scheduledFor <= now`: that field is only an *estimate* used when the
+ * item was planned (for wheel-matching/horizon accounting), and real playback
+ * timing drifts from the estimate (skips, manual queue insertions, etc.) --
+ * gating on it here would risk a real silence gap the moment actual playback
+ * runs ahead of the plan.
  */
 async function claimNextQueueItem(): Promise<ClaimedItem | null> {
   return prisma.$transaction(async (tx) => {
     const due = await tx.scheduledItem.findFirst({
-      where: { status: "PENDING", scheduledFor: { lte: new Date() } },
+      where: { status: "PENDING", scheduledFor: { lte: new Date() }, clockWheelStepId: null },
       orderBy: [{ scheduledFor: "asc" }, { position: "asc" }],
       include: claimInclude,
     });
-    const next =
+    const manual =
       due ??
       (await tx.scheduledItem.findFirst({
         where: { status: "PENDING", scheduledFor: null },
         orderBy: { position: "asc" },
         include: claimInclude,
       }));
+    const next =
+      manual ??
+      (await tx.scheduledItem.findFirst({
+        where: { status: "PENDING", clockWheelStepId: { not: null } },
+        orderBy: { position: "asc" },
+        include: claimInclude,
+      }));
     if (!next) return null;
+
+    const now = new Date();
+    const media = next.song ?? next.jingle ?? next.ad;
+    if (!media) {
+      throw new Error(`ScheduledItem ${next.id} has no song/jingle/ad attached`);
+    }
 
     await tx.scheduledItem.update({
       where: { id: next.id },
-      data: { status: "PLAYED", playedAt: new Date() },
+      data: { status: "PLAYED", playedAt: now },
     });
+
+    // Durable history for separation-rule / least-recently-played lookups (see
+    // clockWheelEngine.ts) -- the only writer of this table. Playback here is
+    // deterministic (no separate "still playing" state elsewhere tracks actual
+    // completion), so endedAt/durationMs are derived from the media's own known
+    // duration rather than closed out later by some other event.
+    await tx.playbackHistoryEntry.create({
+      data: {
+        mediaKind: PLAYBACK_MEDIA_KIND[next.mediaKind],
+        songId: next.songId,
+        jingleId: next.jingleId,
+        adId: next.adId,
+        source: next.clockWheelStepId ? "CLOCK_WHEEL" : next.scheduleRuleId ? "SCHEDULED_ITEM" : "MANUAL",
+        clockWheelStepId: next.clockWheelStepId,
+        scheduledItemId: next.id,
+        startedAt: now,
+        endedAt: new Date(now.getTime() + media.durationMs),
+        durationMs: media.durationMs,
+        titleSnapshot: media.title,
+        artistSnapshot: next.song?.artist ?? null,
+      },
+    });
+
     return next;
   });
 }

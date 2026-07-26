@@ -30,6 +30,7 @@ export const queueEntryInclude = {
   jingle: true,
   ad: true,
   scheduleRule: { select: { name: true } },
+  clockWheelStep: { select: { clockWheel: { select: { name: true } } } },
 } satisfies Prisma.ScheduledItemInclude;
 
 export type QueueEntryWithIncludes = Prisma.ScheduledItemGetPayload<{ include: typeof queueEntryInclude }>;
@@ -50,18 +51,21 @@ export function toQueueEntryDTO(item: QueueEntryWithIncludes): QueueEntryDTO {
     status: item.status,
     addedAt: item.createdAt.toISOString(),
     scheduleRuleName: item.scheduleRule?.name ?? null,
+    clockWheelName: item.clockWheelStep?.clockWheel.name ?? null,
   };
 }
 
 // Due (scheduledFor <= now, materialized by a ScheduleRule firing) items always outrank the
-// manual queue (scheduledFor: null) -- same priority order as internal/playback/next's
-// claimNextQueueItem -- so a manager sees a fired-but-not-yet-claimed block ahead of whatever's
-// manually queued behind it.
+// manual queue (scheduledFor: null), which outranks clock-wheel fills (clockWheelStepId set) --
+// same 3-tier priority order as internal/playback/next's claimNextQueueItem -- so a manager sees
+// a fired-but-not-yet-claimed block ahead of whatever's manually queued, ahead of rotation filler.
+// The clock-wheel tier isn't gated on scheduledFor (see claimNextQueueItem's comment for why), so
+// it's fetched as "all pending clock-wheel rows" rather than a scheduledFor-bounded query.
 queueRoutes.get("/", async (_req, res) => {
   const now = new Date();
-  const [due, manual] = await Promise.all([
+  const [due, manual, wheel] = await Promise.all([
     prisma.scheduledItem.findMany({
-      where: { status: "PENDING", scheduledFor: { lte: now } },
+      where: { status: "PENDING", scheduledFor: { lte: now }, clockWheelStepId: null },
       include: queueEntryInclude,
       orderBy: [{ scheduledFor: "asc" }, { position: "asc" }],
     }),
@@ -70,9 +74,14 @@ queueRoutes.get("/", async (_req, res) => {
       include: queueEntryInclude,
       orderBy: { position: "asc" },
     }),
+    prisma.scheduledItem.findMany({
+      where: { status: "PENDING", clockWheelStepId: { not: null } },
+      include: queueEntryInclude,
+      orderBy: { position: "asc" },
+    }),
   ]);
 
-  const items = [...due, ...manual];
+  const items = [...due, ...manual, ...wheel];
   res.json(items.map((item) => QueueEntrySchema.parse(toQueueEntryDTO(item))));
 });
 

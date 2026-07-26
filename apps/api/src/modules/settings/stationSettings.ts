@@ -15,6 +15,7 @@ export function toStationSettingsDTO(row: {
   logoKey: string | null;
   links: unknown;
   timeFormat: string;
+  queuePlanningHorizonMinutes: number;
   updatedAt: Date;
 }): StationSettingsDTO {
   return {
@@ -23,6 +24,7 @@ export function toStationSettingsDTO(row: {
     logoUrl: row.logoKey ? "/public/station/logo" : null,
     links: (row.links as StationLinkDTO[] | null) ?? [],
     timeFormat: row.timeFormat === "24h" ? "24h" : "12h",
+    queuePlanningHorizonMinutes: row.queuePlanningHorizonMinutes,
     updatedAt: row.updatedAt.toISOString(),
   };
 }

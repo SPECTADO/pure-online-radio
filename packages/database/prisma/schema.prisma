@@ -23,7 +23,8 @@ enum MediaKind {
 
 enum SelectionStrategy {
   RANDOM
-  LEAST_OFTEN_PLAYED
+  LEAST_RECENTLY_PLAYED
+  WEIGHTED_RECENCY // weighted-random toward stale tracks; more strategies may be added later
 }
 
 enum JingleType {
@@ -84,6 +85,7 @@ enum PlaybackSource {
 enum PlaybackMediaKind {
   SONG
   JINGLE
+  AD
   EXTERNAL_STREAM
   LIVE_MIC
 }
@@ -202,6 +204,7 @@ model Ad {
 
   scheduledItems    ScheduledItem[]
   scheduleRuleItems ScheduleRuleItem[]
+  playbackHistory   PlaybackHistoryEntry[]
 
   @@index([activeFrom, activeUntil])
 }
@@ -229,9 +232,17 @@ model ScheduledItem {
   // doesn't erase already-played history.
   scheduleRuleId String?
   scheduleRule   ScheduleRule?       @relation(fields: [scheduleRuleId], references: [id], onDelete: SetNull)
+  // Non-null when this row was materialized by the clock-wheel fill engine (see
+  // apps/api/src/scheduler/clockWheelEngine.ts) -- same traceability-only convention as
+  // scheduleRuleId above. `scheduledFor` on a clock-wheel row is an *estimate* used for
+  // wheel-matching/horizon accounting only, not a claim-time gate -- see claimNextQueueItem.
+  clockWheelStepId String?
+  clockWheelStep   ClockWheelStep?   @relation(fields: [clockWheelStepId], references: [id], onDelete: SetNull)
   stationId    String?
-  createdById  String
-  createdBy    User                @relation(fields: [createdById], references: [id])
+  // Null for system-generated rows (clock-wheel fills have no acting user) -- same nullable
+  // pattern as Song/Jingle/Ad.createdById.
+  createdById  String?
+  createdBy    User?               @relation(fields: [createdById], references: [id])
   createdAt    DateTime            @default(now())
   playedAt     DateTime?
 
@@ -249,6 +260,13 @@ model ClockWheel {
   id        String   @id @default(cuid())
   name      String
   isActive  Boolean  @default(true)
+  // Exactly one row has isDefault = true (app-enforced singleton, same pattern as the
+  // GLOBAL SeparationRule) -- fills any time no other active wheel's slot matches. Its
+  // own `slots` are always empty/ignored; it can be edited (steps only) but never deleted.
+  isDefault Boolean  @default(false)
+  // Persisted round-robin pointer into `steps` (index = rotationCursor % steps.length) --
+  // survives across scheduler ticks/restarts and a wheel's non-contiguous active windows.
+  rotationCursor Int @default(0)
   stationId String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -276,12 +294,13 @@ model ClockWheelStep {
   order             Int
   mediaKind         MediaKind
   selectionStrategy SelectionStrategy
-  categoryId        String? // required when mediaKind = SONG
+  categoryId        String? // null = all categories (any mediaKind)
   category          Category?         @relation(fields: [categoryId], references: [id])
   tag               String? // optional filter, e.g. jingle tag
   createdAt         DateTime          @default(now())
 
   playbackHistory PlaybackHistoryEntry[]
+  scheduledItems  ScheduledItem[]
 
   @@unique([clockWheelId, order])
 }
@@ -353,6 +372,7 @@ model SeparationRule {
   clockWheelId            String? // null while scope = GLOBAL
   clockWheel              ClockWheel?         @relation(fields: [clockWheelId], references: [id])
   artistSeparationMinutes Int                 @default(60)
+  albumSeparationMinutes  Int                 @default(90)
   songSeparationMinutes   Int                 @default(120)
   updatedAt               DateTime            @updatedAt
   updatedById             String?
@@ -375,6 +395,9 @@ model StationSettings {
   logoMimeType String?
   links        Json     @default("[]") // StationLinkDTO[] -- {platform, url, label?}
   timeFormat   String   @default("12h") // TimeFormat -- "12h" | "24h"
+  // How far ahead the clock-wheel fill engine keeps the queue planned -- see
+  // apps/api/src/scheduler/clockWheelEngine.ts.
+  queuePlanningHorizonMinutes Int @default(240)
   updatedAt    DateTime @updatedAt
   updatedById  String?
   updatedBy    User?    @relation(fields: [updatedById], references: [id])
@@ -440,6 +463,8 @@ model PlaybackHistoryEntry {
   song             Song?             @relation(fields: [songId], references: [id])
   jingleId         String?
   jingle           Jingle?           @relation(fields: [jingleId], references: [id])
+  adId             String?
+  ad               Ad?               @relation(fields: [adId], references: [id])
   externalStreamId String?
   externalStream   ExternalStream?   @relation(fields: [externalStreamId], references: [id])
   source           PlaybackSource

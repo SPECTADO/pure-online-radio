@@ -255,7 +255,7 @@ export function QueuePage() {
                           artist={row.entry.artist}
                           mediaKind={row.entry.mediaKind}
                           durationMs={row.entry.durationMs}
-                          tagLabel="Scheduled"
+                          tagLabel={row.entry.scheduleRuleName ? "Scheduled" : "Rotation"}
                           onRemove={() => setPendingRemove(row.entry)}
                         />
                       );
