@@ -11,21 +11,24 @@ import type {
   PlaybackMode,
   QueueEntryDTO,
   ScratchPadDTO,
+  UpcomingTriggerDTO,
 } from "@spectado/shared-types";
 import { NATS_SUBJECTS } from "@spectado/shared-types";
 import { apiClient, apiUrl, ApiError } from "../lib/apiClient";
 import { useNatsSubject } from "../lib/natsClient";
 import { useCountdown } from "../lib/useCountdown";
 import { useNow } from "../lib/useNow";
-import { withExpectedStartTimes } from "../lib/queueTiming";
+import { buildUpNextList, type UpNextDisplayEntry } from "../lib/queueTiming";
 import { formatDuration, formatTimeOfDay } from "../lib/format";
 import { useTimeFormat } from "../lib/useTimeFormat";
 import { ProgressBar } from "../components/ProgressBar";
 import { MediaKindBadge } from "../components/MediaKindBadge";
 import { QuickAddSection } from "../components/QuickAddSection";
+import { ScheduledTag } from "../components/ScheduledTag";
 
 const NOW_PLAYING_KEY = ["now-playing"];
 const QUEUE_KEY = ["queue"];
+const UPCOMING_TRIGGERS_KEY = ["queue", "upcoming-triggers"];
 const JINGLES_KEY = ["library", "jingles"];
 const SCRATCH_PAD_KEY = ["settings", "scratch-pad"];
 const UPCOMING_COUNT = 5;
@@ -72,6 +75,15 @@ export function DashboardPage() {
   });
   useNatsSubject(NATS_SUBJECTS.control.queueUpdated, () => {
     queryClient.invalidateQueries({ queryKey: QUEUE_KEY });
+  });
+
+  // Not-yet-fired schedule/external-stream previews -- these change far less often than the
+  // queue itself, so a slower poll is enough.
+  const upcomingTriggersQuery = useQuery({
+    queryKey: UPCOMING_TRIGGERS_KEY,
+    queryFn: () => apiClient.get<UpcomingTriggerDTO[]>("/queue/upcoming-triggers"),
+    retry: false,
+    refetchInterval: 30_000,
   });
 
   const jinglesQuery = useQuery({
@@ -132,8 +144,8 @@ export function DashboardPage() {
   const nowPlaying = nowPlayingQuery.data;
 
   const upNextAll = useMemo(
-    () => withExpectedStartTimes(nowPlaying, queueQuery.data ?? []),
-    [nowPlaying, queueQuery.data],
+    () => buildUpNextList(nowPlaying, queueQuery.data ?? [], upcomingTriggersQuery.data ?? []),
+    [nowPlaying, queueQuery.data, upcomingTriggersQuery.data],
   );
   const upNext = upNextAll.slice(0, UPCOMING_COUNT);
   const upNextMoreCount = Math.max(0, upNextAll.length - UPCOMING_COUNT);
@@ -251,13 +263,7 @@ function NowPlayingSection({
   );
 }
 
-function UpNextSection({
-  upNext,
-  moreCount,
-}: {
-  upNext: ReturnType<typeof withExpectedStartTimes>;
-  moreCount: number;
-}) {
+function UpNextSection({ upNext, moreCount }: { upNext: UpNextDisplayEntry[]; moreCount: number }) {
   const timeFormat = useTimeFormat();
 
   return (
@@ -268,16 +274,30 @@ function UpNextSection({
       ) : (
         <>
           <ul className="flex flex-col gap-2">
-            {upNext.map((entry) => (
-              <li key={entry.id} className="flex items-center gap-2 text-sm">
+            {upNext.map((row) => (
+              <li key={row.key} className="flex items-center gap-2 text-sm">
                 <span className="shrink-0 whitespace-nowrap tabular-nums text-slate-400">
-                  {formatTimeOfDay(entry.expectedStartAt, timeFormat)}
+                  {formatTimeOfDay(row.expectedAt, timeFormat)}
                 </span>
-                <span className="truncate text-slate-800">{entry.title}</span>
-                {entry.artist && <span className="shrink-0 truncate text-slate-400">— {entry.artist}</span>}
-                <span className="ml-auto shrink-0">
-                  <MediaKindBadge kind={entry.mediaKind} />
-                </span>
+                {row.kind === "queued" ? (
+                  <>
+                    <span className="truncate text-slate-800">{row.entry.title}</span>
+                    {row.entry.artist && (
+                      <span className="shrink-0 truncate text-slate-400">— {row.entry.artist}</span>
+                    )}
+                    {row.entry.scheduleRuleName && <ScheduledTag label="Scheduled" />}
+                    <span className="ml-auto shrink-0">
+                      <MediaKindBadge kind={row.entry.mediaKind} />
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="truncate text-slate-500 italic">{row.trigger.name}</span>
+                    <span className="ml-auto shrink-0">
+                      <ScheduledTag label={row.kind === "SCHEDULE_RULE" ? "Scheduled" : "External stream"} />
+                    </span>
+                  </>
+                )}
               </li>
             ))}
           </ul>

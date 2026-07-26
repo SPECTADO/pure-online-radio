@@ -7,11 +7,17 @@ import {
   JingleStopCommandSchema,
   NATS_SUBJECTS,
   QueueUpdatedBroadcastSchema,
+  RelayCancelCommandSchema,
+  RelayStartCommandSchema,
+  RelayStopCommandSchema,
   SetModeCommandSchema,
   type AdvanceCommand,
   type JinglePlayCommand,
   type JingleStopCommand,
   type PlaybackMode,
+  type RelayCancelCommand,
+  type RelayStartCommand,
+  type RelayStopCommand,
   type SetModeCommand,
 } from "@spectado/shared-types";
 import { getPresignedGetUrl } from "../lib/storage.js";
@@ -90,6 +96,43 @@ export async function publishJingleStopCommand(params: {
 }): Promise<JingleStopCommand> {
   const command: JingleStopCommand = { commandId: randomUUID() };
   await auditAndPublish(NATS_SUBJECTS.cmd.jingleStop, JingleStopCommandSchema, command, params.userId);
+  return command;
+}
+
+export async function publishRelayStartCommand(params: {
+  relayId: string;
+  url: string;
+  startAt: Date;
+  endAt: Date | null;
+  userId: string | null;
+}): Promise<RelayStartCommand> {
+  const command: RelayStartCommand = {
+    commandId: randomUUID(),
+    relayId: params.relayId,
+    url: params.url,
+    startAt: params.startAt.toISOString(),
+    endAt: params.endAt ? params.endAt.toISOString() : null,
+    onFailure: "fallbackToQueue",
+  };
+  await auditAndPublish(NATS_SUBJECTS.cmd.relayStart, RelayStartCommandSchema, command, params.userId);
+  return command;
+}
+
+export async function publishRelayStopCommand(params: {
+  relayId: string;
+  userId: string | null;
+}): Promise<RelayStopCommand> {
+  const command: RelayStopCommand = { commandId: randomUUID(), relayId: params.relayId };
+  await auditAndPublish(NATS_SUBJECTS.cmd.relayStop, RelayStopCommandSchema, command, params.userId);
+  return command;
+}
+
+export async function publishRelayCancelCommand(params: {
+  relayId: string;
+  userId: string | null;
+}): Promise<RelayCancelCommand> {
+  const command: RelayCancelCommand = { commandId: randomUUID(), relayId: params.relayId };
+  await auditAndPublish(NATS_SUBJECTS.cmd.relayCancel, RelayCancelCommandSchema, command, params.userId);
   return command;
 }
 

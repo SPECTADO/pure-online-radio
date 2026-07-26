@@ -9,7 +9,7 @@ import { NowPlayingSchema } from "../dto/now-playing.js";
 export const AdvanceCommandSchema = z.object({
   commandId: z.string(),
   requestedBy: z.string().nullable(),
-  reason: z.enum(["skip", "manual-start"]),
+  reason: z.enum(["skip", "manual-start", "scheduled"]),
 });
 export type AdvanceCommand = z.infer<typeof AdvanceCommandSchema>;
 
@@ -53,7 +53,8 @@ export const RelayStartCommandSchema = z.object({
   relayId: z.string(),
   url: z.string().url(),
   startAt: z.string().datetime(),
-  endAt: z.string().datetime(),
+  // null = no forced end -- run until the source itself stops (ExternalStreamEndBehavior.NATURAL).
+  endAt: z.string().datetime().nullable(),
   onFailure: z.enum(["retry", "fallbackToQueue"]).default("fallbackToQueue"),
 });
 export type RelayStartCommand = z.infer<typeof RelayStartCommandSchema>;
@@ -89,7 +90,7 @@ export const QueueAdvancedStatusSchema = z.object({
   ts: z.string().datetime(),
   previousTrackId: z.string().nullable(),
   currentTrackId: z.string().nullable(),
-  reason: z.enum(["auto", "manual-start", "skip"]),
+  reason: z.enum(["auto", "manual-start", "skip", "scheduled"]),
 });
 export type QueueAdvancedStatus = z.infer<typeof QueueAdvancedStatusSchema>;
 
@@ -106,6 +107,18 @@ export const JingleEndedStatusSchema = z.object({
   jingleId: z.string(),
 });
 export type JingleEndedStatus = z.infer<typeof JingleEndedStatusSchema>;
+
+export const RelayStartedStatusSchema = z.object({
+  ts: z.string().datetime(),
+  relayId: z.string(),
+});
+export type RelayStartedStatus = z.infer<typeof RelayStartedStatusSchema>;
+
+export const RelayEndedStatusSchema = z.object({
+  ts: z.string().datetime(),
+  relayId: z.string(),
+});
+export type RelayEndedStatus = z.infer<typeof RelayEndedStatusSchema>;
 
 export const ErrorStatusSchema = z.object({
   ts: z.string().datetime(),

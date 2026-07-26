@@ -9,6 +9,8 @@ import {
 } from "@spectado/shared-types";
 import { internalOnly } from "../../middleware/internalOnly.js";
 import { getPresignedGetUrl } from "../../lib/storage.js";
+import { logger } from "../../logger.js";
+import { incrementSongPlayCountAndFire } from "../../scheduler/scheduleRuleScheduler.js";
 
 export const internalRoutes = Router();
 
@@ -20,22 +22,33 @@ type ClaimedItem = Prisma.ScheduledItemGetPayload<{ include: typeof claimInclude
 const TRACK_URL_BUFFER_SECONDS = 120;
 
 /**
- * Atomically pops the head of the manual queue (lowest `position` among
- * PENDING, unscheduled ScheduledItems) and marks it PLAYED. There is no
+ * Atomically pops the next item to play and marks it PLAYED. There is no
  * separate "now playing" queue-row state (ScheduledItemStatus has no
  * PLAYING) -- being handed out for playback *is* "played" as far as the
  * queue table is concerned; the encoder/NATS status stream is the source of
  * truth for what's actually audible right now. Only one caller may ever
  * invoke this (the encoder's own advance-driven fetch) since it has a real
  * side effect -- see apps/encoder/src/api/apiClient.ts.
+ *
+ * Due schedule-block items (`scheduledFor <= now`, materialized by a
+ * ScheduleRule firing -- see apps/api/src/scheduler/) always outrank the
+ * manual queue (`scheduledFor: null`); the manual queue is only drained once
+ * nothing is due.
  */
 async function claimNextQueueItem(): Promise<ClaimedItem | null> {
   return prisma.$transaction(async (tx) => {
-    const next = await tx.scheduledItem.findFirst({
-      where: { status: "PENDING", scheduledFor: null },
-      orderBy: { position: "asc" },
+    const due = await tx.scheduledItem.findFirst({
+      where: { status: "PENDING", scheduledFor: { lte: new Date() } },
+      orderBy: [{ scheduledFor: "asc" }, { position: "asc" }],
       include: claimInclude,
     });
+    const next =
+      due ??
+      (await tx.scheduledItem.findFirst({
+        where: { status: "PENDING", scheduledFor: null },
+        orderBy: { position: "asc" },
+        include: claimInclude,
+      }));
     if (!next) return null;
 
     await tx.scheduledItem.update({
@@ -77,6 +90,14 @@ internalRoutes.get("/playback/next", async (_req, res) => {
   let directive: PlaybackDirectiveDTO;
   if (claimed) {
     directive = await toTrackDirective(claimed);
+
+    // Best-effort: a scheduler hiccup here must never break the encoder's next-track
+    // fetch. Songs only, per the confirmed "each X songs played" scope.
+    if (claimed.mediaKind === "SONG") {
+      incrementSongPlayCountAndFire(new Date()).catch((err: unknown) => {
+        logger.error({ err }, "failed to increment play-count schedule rules");
+      });
+    }
   } else {
     const silence: SilenceDirectiveDTO = {
       type: "silence",

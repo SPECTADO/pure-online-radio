@@ -41,3 +41,12 @@ export type PlaybackMode = z.infer<typeof PlaybackModeSchema>;
 
 export const WeekdaySchema = z.number().int().min(0).max(6); // 0=Sun..6=Sat
 export type Weekday = z.infer<typeof WeekdaySchema>;
+
+export const ScheduleTriggerTypeSchema = z.enum(["ONE_TIME", "WEEKLY", "INTERVAL", "PLAY_COUNT"]);
+export type ScheduleTriggerType = z.infer<typeof ScheduleTriggerTypeSchema>;
+
+export const ScheduleInsertionModeSchema = z.enum(["ASAP", "AT_TIME"]);
+export type ScheduleInsertionMode = z.infer<typeof ScheduleInsertionModeSchema>;
+
+export const ExternalStreamEndBehaviorSchema = z.enum(["NATURAL", "AT_TIME", "AFTER_DURATION"]);
+export type ExternalStreamEndBehavior = z.infer<typeof ExternalStreamEndBehaviorSchema>;

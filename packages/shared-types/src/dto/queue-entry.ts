@@ -14,6 +14,9 @@ export const QueueEntrySchema = z.object({
   scheduledFor: z.string().datetime().nullable(), // null = "as soon as due" (the manual queue)
   status: ScheduledItemStatusSchema,
   addedAt: z.string().datetime(),
+  // Denormalized, same convention as title/artist -- null for a manually-queued or
+  // ad-hoc one-off item; set when this row was materialized by a ScheduleRule firing.
+  scheduleRuleName: z.string().nullable(),
 });
 export type QueueEntryDTO = z.infer<typeof QueueEntrySchema>;
 

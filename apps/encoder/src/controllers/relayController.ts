@@ -6,10 +6,15 @@ import type { Logger } from "../util/logger.js";
  * and acks every command itself; nothing calls into this controller yet.
  *
  * TODO (full design): on RelayStartCommand, construct a
- * sources/relaySource.ts, schedule it to become the primary source at
- * `startAt` (via TransitionSource) and to hand back to the queue at
- * `endAt`; apply RelayStartCommand.onFailure ("retry" | "fallbackToQueue")
- * if the relay can't connect. On RelayStopCommand, end the relay early. On
+ * sources/relaySource.ts, switch the mixer's primary source to it (the api
+ * already decides *when* to send this command -- immediately for an AT_TIME
+ * schedule, or once the current queue item is about to finish for ASAP --
+ * see apps/api/src/scheduler/externalStreamScheduler.ts), and hand back to
+ * the queue at `endAt` if one was sent (null = no forced end, run until the
+ * source itself stops -- e.g. on-demand EOF or a live disconnect -- and
+ * publish relay.ended so the api can mark it stopped). Apply
+ * RelayStartCommand.onFailure ("retry" | "fallbackToQueue") if the relay
+ * can't connect. On RelayStopCommand, end the relay early. On
  * RelayCancelCommand, cancel a not-yet-started scheduled relay outright.
  */
 export class RelayController {

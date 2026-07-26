@@ -55,6 +55,24 @@ enum SeparationRuleScope {
   CLOCK_WHEEL // future: scoped to a specific ClockWheel
 }
 
+enum ScheduleTriggerType {
+  ONE_TIME // runAt
+  WEEKLY // weekdays + timeOfDay
+  INTERVAL // weekdays + intervalMinutes [+ windowStart/windowEnd]
+  PLAY_COUNT // everyNPlays (songs played)
+}
+
+enum ScheduleInsertionMode {
+  ASAP // let the current item finish, then insert
+  AT_TIME // interrupt the current item immediately
+}
+
+enum ExternalStreamEndBehavior {
+  NATURAL // stop when the source itself stops (on-demand EOF / live disconnect)
+  AT_TIME // force-stop at an absolute datetime (endAt)
+  AFTER_DURATION // force-stop durationMs after the relay actually started
+}
+
 enum PlaybackSource {
   CLOCK_WHEEL
   SCHEDULED_ITEM
@@ -86,6 +104,7 @@ model User {
   createdJingles         Jingle[]               @relation("JingleCreatedBy")
   createdAds             Ad[]                  @relation("AdCreatedBy")
   createdScheduledItems   ScheduledItem[]
+  createdScheduleRules    ScheduleRule[]
   createdExternalStreams  ExternalStream[]
   updatedSeparationRules  SeparationRule[]
   updatedStationSettings  StationSettings[]
@@ -125,8 +144,9 @@ model Song {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  scheduledItems  ScheduledItem[]
-  playbackHistory PlaybackHistoryEntry[]
+  scheduledItems   ScheduledItem[]
+  scheduleRuleItems ScheduleRuleItem[]
+  playbackHistory  PlaybackHistoryEntry[]
 
   @@index([artist])
 }
@@ -148,8 +168,9 @@ model Jingle {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  scheduledItems  ScheduledItem[]
-  playbackHistory PlaybackHistoryEntry[]
+  scheduledItems   ScheduledItem[]
+  scheduleRuleItems ScheduleRuleItem[]
+  playbackHistory  PlaybackHistoryEntry[]
 
   @@index([type])
 }
@@ -179,7 +200,8 @@ model Ad {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  scheduledItems ScheduledItem[]
+  scheduledItems    ScheduledItem[]
+  scheduleRuleItems ScheduleRuleItem[]
 
   @@index([activeFrom, activeUntil])
 }
@@ -201,6 +223,12 @@ model ScheduledItem {
   adId         String?
   ad           Ad?                 @relation(fields: [adId], references: [id])
   status       ScheduledItemStatus @default(PENDING)
+  // Non-null when this row was materialized by a ScheduleRule firing (as opposed to a
+  // manager manually queuing/one-off-scheduling an item) -- traceability only, doesn't
+  // change how the row is claimed/played. SetNull (not Cascade) so deleting the rule
+  // doesn't erase already-played history.
+  scheduleRuleId String?
+  scheduleRule   ScheduleRule?       @relation(fields: [scheduleRuleId], references: [id], onDelete: SetNull)
   stationId    String?
   createdById  String
   createdBy    User                @relation(fields: [createdById], references: [id])
@@ -258,6 +286,65 @@ model ClockWheelStep {
   @@unique([clockWheelId, order])
 }
 
+// ── Schedule rules (recurring/one-off song/jingle/ad blocks) ─────────────
+// A rule defines *when* to fire (one of the 4 ScheduleTriggerType shapes) and
+// *how* to insert (ScheduleInsertionMode); firing materializes one ScheduledItem
+// per ScheduleRuleItem (in order) with scheduledFor = the fire time -- see
+// apps/api/src/scheduler/. A plain "run once at this date/time" schedule is
+// just triggerType = ONE_TIME, which deactivates itself after firing.
+
+model ScheduleRule {
+  id            String                @id @default(cuid())
+  name          String
+  isActive      Boolean               @default(true)
+  triggerType   ScheduleTriggerType
+  insertionMode ScheduleInsertionMode @default(ASAP)
+
+  // ONE_TIME
+  runAt DateTime?
+
+  // WEEKLY: weekdays + timeOfDay. INTERVAL: weekdays + intervalMinutes [+ window].
+  weekdays        Int[]     @default([]) // 0=Sun..6=Sat; empty = every day (INTERVAL only)
+  timeOfDay       DateTime? @db.Time()
+  intervalMinutes Int?
+  windowStart     DateTime? @db.Time() // null = from midnight
+  windowEnd       DateTime? @db.Time() // null = to end of day
+
+  // PLAY_COUNT
+  everyNPlays           Int?
+  playsSinceLastTrigger Int @default(0)
+
+  lastTriggeredAt DateTime?
+  stationId       String?
+  createdById     String
+  createdBy       User      @relation(fields: [createdById], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  items          ScheduleRuleItem[]
+  scheduledItems ScheduledItem[] // materialized occurrences, traceability only
+
+  @@index([triggerType, isActive])
+}
+
+model ScheduleRuleItem {
+  id             String       @id @default(cuid())
+  scheduleRuleId String
+  scheduleRule   ScheduleRule @relation(fields: [scheduleRuleId], references: [id], onDelete: Cascade)
+  order          Int
+  mediaKind      MediaKind
+  songId         String?
+  song           Song?        @relation(fields: [songId], references: [id])
+  jingleId       String?
+  jingle         Jingle?      @relation(fields: [jingleId], references: [id])
+  adId           String?
+  ad             Ad?          @relation(fields: [adId], references: [id])
+  // NOTE: same "exactly one of songId/jingleId/adId set, matching mediaKind" constraint
+  // as ScheduledItem -- enforced in the application layer (zod), not the schema.
+
+  @@unique([scheduleRuleId, order])
+}
+
 // ── Separation rules (global today, scopable later) ──────────────────────
 
 model SeparationRule {
@@ -306,21 +393,39 @@ model ScratchPad {
 // ── External stream scheduling ────────────────────────────────────────────
 
 model ExternalStream {
-  id          String               @id @default(cuid())
-  name        String
-  url         String
-  startAt     DateTime
-  endAt       DateTime
-  status      ExternalStreamStatus @default(SCHEDULED)
+  id     String               @id @default(cuid())
+  name   String
+  url    String
+  status ExternalStreamStatus @default(SCHEDULED)
+
+  // Same trigger shape as ScheduleRule -- see apps/api/src/scheduler/.
+  triggerType     ScheduleTriggerType
+  insertionMode   ScheduleInsertionMode @default(ASAP)
+  runAt           DateTime? // ONE_TIME
+  weekdays        Int[]     @default([]) // WEEKLY, INTERVAL
+  timeOfDay       DateTime? @db.Time() // WEEKLY
+  intervalMinutes Int? // INTERVAL
+  windowStart     DateTime? @db.Time() // INTERVAL, null = from midnight
+  windowEnd       DateTime? @db.Time() // INTERVAL, null = to end of day
+  everyNPlays           Int? // PLAY_COUNT
+  playsSinceLastTrigger Int @default(0)
+  lastTriggeredAt       DateTime?
+
+  // Independent of the trigger: how a PLAYING relay stops.
+  endBehavior ExternalStreamEndBehavior @default(NATURAL)
+  endAt       DateTime? // required (app layer) when endBehavior = AT_TIME
+  durationMs  Int? // required (app layer) when endBehavior = AFTER_DURATION
+  startedAt   DateTime? // actual runtime start of the current/most recent PLAYING run
+
   stationId   String?
   createdById String
-  createdBy   User                 @relation(fields: [createdById], references: [id])
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   playbackHistory PlaybackHistoryEntry[]
 
-  @@index([startAt, endAt])
+  @@index([triggerType, status])
 }
 
 // ── Now-playing / history ─────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import { logger } from "./logger.js";
 import { connectNats, disconnectNats } from "./nats/client.js";
 import { startEncoderStatusSubscriber } from "./nats/subscriber.js";
 import { redis } from "./redis/client.js";
+import { startScheduler, stopScheduler } from "./scheduler/index.js";
 
 async function main(): Promise<void> {
   // Prisma connects lazily on first query; referencing the singleton here just
@@ -14,6 +15,7 @@ async function main(): Promise<void> {
 
   await connectNats();
   startEncoderStatusSubscriber();
+  const schedulerTimer = startScheduler();
 
   const app = createApp();
   const server = createServer(app);
@@ -28,6 +30,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info({ signal }, "shutting down");
 
+    stopScheduler(schedulerTimer);
     server.close();
 
     await Promise.allSettled([disconnectNats(), redis.quit(), prisma.$disconnect()]);

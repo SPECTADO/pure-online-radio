@@ -19,24 +19,32 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { NowPlayingDTO, NowPlayingStatus, QueueEntryDTO, TimeFormat } from "@spectado/shared-types";
+import type {
+  NowPlayingDTO,
+  NowPlayingStatus,
+  QueueEntryDTO,
+  TimeFormat,
+  UpcomingTriggerDTO,
+} from "@spectado/shared-types";
 import { NATS_SUBJECTS } from "@spectado/shared-types";
 import { apiClient, ApiError } from "../lib/apiClient";
 import { showToast } from "../lib/toastStore";
 import { useNatsSubject } from "../lib/natsClient";
 import { useCountdownTo } from "../lib/useCountdownTo";
 import { useTimeFormat } from "../lib/useTimeFormat";
-import { withExpectedStartTimes } from "../lib/queueTiming";
+import { buildUpNextList, type UpNextDisplayEntry } from "../lib/queueTiming";
 import { ComingSoon } from "../components/ComingSoon";
 import { Modal } from "../components/Modal";
 import { MediaKindBadge } from "../components/MediaKindBadge";
+import { ScheduledTag } from "../components/ScheduledTag";
 import { QuickAddSection } from "../components/QuickAddSection";
 import { formatDuration, formatTimeOfDay } from "../lib/format";
 import { rowActionButtonDanger } from "../lib/buttonStyles";
 
-type QueueItemWithStart = QueueEntryDTO & { expectedStartAt: number };
+type QueuedRow = Extract<UpNextDisplayEntry, { kind: "queued" }>;
 
 const QUEUE_KEY = ["queue"];
+const UPCOMING_TRIGGERS_KEY = ["queue", "upcoming-triggers"];
 const NOW_PLAYING_KEY = ["now-playing"];
 
 export function QueuePage() {
@@ -57,6 +65,14 @@ export function QueuePage() {
     queryClient.invalidateQueries({ queryKey: QUEUE_KEY });
   });
 
+  // Not-yet-fired schedule/external-stream previews -- change far less often than the queue.
+  const upcomingTriggersQuery = useQuery({
+    queryKey: UPCOMING_TRIGGERS_KEY,
+    queryFn: () => apiClient.get<UpcomingTriggerDTO[]>("/queue/upcoming-triggers"),
+    retry: false,
+    refetchInterval: 30_000,
+  });
+
   // Needed (not displayed directly) to compute each item's expected start
   // time -- when the currently-playing item is expected to end is the base
   // that queue durations get added onto.
@@ -69,13 +85,23 @@ export function QueuePage() {
     queryClient.setQueryData<NowPlayingDTO>(NOW_PLAYING_KEY, data);
   });
 
-  const itemsWithStart = useMemo(
-    () => withExpectedStartTimes(nowPlayingQuery.data, queueQuery.data ?? []),
-    [nowPlayingQuery.data, queueQuery.data],
+  const mergedList = useMemo(
+    () => buildUpNextList(nowPlayingQuery.data, queueQuery.data ?? [], upcomingTriggersQuery.data ?? []),
+    [nowPlayingQuery.data, queueQuery.data, upcomingTriggersQuery.data],
   );
-  const firstItemCountdownMs = useCountdownTo(itemsWithStart[0]?.expectedStartAt ?? null);
-  const lastItem = itemsWithStart[itemsWithStart.length - 1];
-  const plannedTillMs = lastItem ? lastItem.expectedStartAt + lastItem.durationMs : null;
+
+  // Only true manual (unscheduled) items are draggable -- due schedule-fired items and
+  // not-yet-fired previews are read-only, positioned wherever their expected time falls.
+  const manualRows = useMemo(
+    () => mergedList.filter((row): row is QueuedRow => row.kind === "queued" && row.entry.scheduledFor === null),
+    [mergedList],
+  );
+  const manualEntries = useMemo(() => manualRows.map((row) => row.entry), [manualRows]);
+
+  const queuedRows = mergedList.filter((row): row is QueuedRow => row.kind === "queued");
+  const lastQueuedRow = queuedRows[queuedRows.length - 1];
+  const plannedTillMs = lastQueuedRow ? lastQueuedRow.expectedAt + lastQueuedRow.entry.durationMs : null;
+  const firstItemCountdownMs = useCountdownTo(mergedList[0]?.expectedAt ?? null);
 
   const removeMutation = useMutation({
     mutationFn: (item: QueueEntryDTO) => apiClient.delete(`/queue/items/${item.id}`),
@@ -94,18 +120,20 @@ export function QueuePage() {
 
   const reorderMutation = useMutation({
     mutationFn: (orderedIds: string[]) => apiClient.patch("/queue/items/reorder", { orderedIds }),
-    // Reorder the cached list immediately so a drag-drop lands exactly where
-    // it was dropped instead of snapping back to the old order until the
-    // request round-trips.
+    // Reorder the cached list immediately so a drag-drop lands exactly where it was dropped
+    // instead of snapping back until the request round-trips. The cache can also contain due
+    // (scheduledFor set) items now, which aren't part of `orderedIds` -- keep those in place and
+    // only rewrite the manual (scheduledFor: null) slice.
     onMutate: async (orderedIds) => {
       await queryClient.cancelQueries({ queryKey: QUEUE_KEY });
       const previous = queryClient.getQueryData<QueueEntryDTO[]>(QUEUE_KEY);
       if (previous) {
-        const byId = new Map(previous.map((item) => [item.id, item]));
-        queryClient.setQueryData<QueueEntryDTO[]>(
-          QUEUE_KEY,
-          orderedIds.map((id) => byId.get(id)).filter((item): item is QueueEntryDTO => item !== undefined),
-        );
+        const due = previous.filter((item) => item.scheduledFor !== null);
+        const manualById = new Map(previous.filter((item) => item.scheduledFor === null).map((item) => [item.id, item]));
+        const reorderedManual = orderedIds
+          .map((id) => manualById.get(id))
+          .filter((item): item is QueueEntryDTO => item !== undefined);
+        queryClient.setQueryData<QueueEntryDTO[]>(QUEUE_KEY, [...due, ...reorderedManual]);
       }
       return { previous };
     },
@@ -120,7 +148,7 @@ export function QueuePage() {
   });
 
   function reorderTo(items: QueueEntryDTO[], fromIndex: number, toIndex: number) {
-    if (fromIndex === toIndex || toIndex < 0 || toIndex >= items.length) return;
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || toIndex >= items.length) return;
     reorderMutation.mutate(arrayMove(items, fromIndex, toIndex).map((item) => item.id));
   }
 
@@ -131,7 +159,7 @@ export function QueuePage() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
   const [activeId, setActiveId] = useState<string | null>(null);
-  const activeItem = itemsWithStart.find((item) => item.id === activeId) ?? null;
+  const activeRow = manualRows.find((row) => row.entry.id === activeId) ?? null;
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(String(event.active.id));
@@ -141,9 +169,9 @@ export function QueuePage() {
     setActiveId(null);
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = itemsWithStart.findIndex((item) => item.id === active.id);
-    const newIndex = itemsWithStart.findIndex((item) => item.id === over.id);
-    reorderTo(itemsWithStart, oldIndex, newIndex);
+    const oldIndex = manualEntries.findIndex((item) => item.id === active.id);
+    const newIndex = manualEntries.findIndex((item) => item.id === over.id);
+    reorderTo(manualEntries, oldIndex, newIndex);
   }
 
   return (
@@ -177,11 +205,11 @@ export function QueuePage() {
         </div>
       )}
 
-      {queueQuery.data && queueQuery.data.length === 0 && (
+      {queueQuery.data && mergedList.length === 0 && (
         <ComingSoon title="Queue is empty" detail="Items added to the manual queue appear here." />
       )}
 
-      {queueQuery.data && queueQuery.data.length > 0 && (
+      {queueQuery.data && mergedList.length > 0 && (
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
@@ -201,47 +229,74 @@ export function QueuePage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                <SortableContext
-                  items={itemsWithStart.map((item) => item.id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  {itemsWithStart.map((entry, index) => (
-                    <QueueRow
-                      key={entry.id}
-                      entry={entry}
-                      timeFormat={timeFormat}
-                      countdownMs={index === 0 ? firstItemCountdownMs : null}
-                      isFirst={index === 0}
-                      onRemove={() => setPendingRemove(entry)}
-                    />
-                  ))}
+                <SortableContext items={manualEntries.map((item) => item.id)} strategy={verticalListSortingStrategy}>
+                  {mergedList.map((row, index) => {
+                    const countdownMs = index === 0 ? firstItemCountdownMs : null;
+                    if (row.kind === "queued" && row.entry.scheduledFor === null) {
+                      return (
+                        <ManualQueueRow
+                          key={row.key}
+                          entry={row.entry}
+                          expectedAt={row.expectedAt}
+                          timeFormat={timeFormat}
+                          countdownMs={countdownMs}
+                          onRemove={() => setPendingRemove(row.entry)}
+                        />
+                      );
+                    }
+                    if (row.kind === "queued") {
+                      return (
+                        <StaticQueueRow
+                          key={row.key}
+                          expectedAt={row.expectedAt}
+                          timeFormat={timeFormat}
+                          countdownMs={countdownMs}
+                          title={row.entry.title}
+                          artist={row.entry.artist}
+                          mediaKind={row.entry.mediaKind}
+                          durationMs={row.entry.durationMs}
+                          tagLabel="Scheduled"
+                          onRemove={() => setPendingRemove(row.entry)}
+                        />
+                      );
+                    }
+                    return (
+                      <TriggerPreviewRow
+                        key={row.key}
+                        expectedAt={row.expectedAt}
+                        timeFormat={timeFormat}
+                        countdownMs={countdownMs}
+                        trigger={row.trigger}
+                      />
+                    );
+                  })}
                 </SortableContext>
               </tbody>
             </table>
           </div>
 
           <DragOverlay>
-            {activeItem && (
+            {activeRow && (
               <table className="w-full text-left text-sm shadow-xl">
                 <tbody>
                   <tr className="rounded-lg border border-slate-300 bg-white">
                     <td className="rounded-l-lg px-4 py-3 text-slate-600">
                       <div className="flex items-center gap-2">
                         <span className="text-slate-400">⠿</span>
-                        <span>{formatTimeOfDay(activeItem.expectedStartAt, timeFormat)}</span>
+                        <span>{formatTimeOfDay(activeRow.expectedAt, timeFormat)}</span>
                       </div>
                     </td>
                     <td className="px-4 py-3 font-medium text-slate-900">
-                      {activeItem.title}
-                      {activeItem.artist && (
-                        <span className="ml-2 font-normal text-slate-500">{activeItem.artist}</span>
+                      {activeRow.entry.title}
+                      {activeRow.entry.artist && (
+                        <span className="ml-2 font-normal text-slate-500">{activeRow.entry.artist}</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <MediaKindBadge kind={activeItem.mediaKind} />
+                      <MediaKindBadge kind={activeRow.entry.mediaKind} />
                     </td>
                     <td className="rounded-r-lg px-4 py-3 text-slate-600">
-                      {formatDuration(activeItem.durationMs)}
+                      {formatDuration(activeRow.entry.durationMs)}
                     </td>
                   </tr>
                 </tbody>
@@ -282,17 +337,36 @@ export function QueuePage() {
   );
 }
 
-function QueueRow({
-  entry,
+function StartsAtCell({
+  expectedAt,
   timeFormat,
   countdownMs,
-  isFirst,
-  onRemove,
 }: {
-  entry: QueueItemWithStart;
+  expectedAt: number;
   timeFormat: TimeFormat;
   countdownMs: number | null;
-  isFirst: boolean;
+}) {
+  return (
+    <span>
+      {formatTimeOfDay(expectedAt, timeFormat)}
+      {countdownMs !== null && (
+        <span className="ml-2 text-xs tabular-nums text-slate-400">(in {formatDuration(countdownMs)})</span>
+      )}
+    </span>
+  );
+}
+
+function ManualQueueRow({
+  entry,
+  expectedAt,
+  timeFormat,
+  countdownMs,
+  onRemove,
+}: {
+  entry: QueueEntryDTO;
+  expectedAt: number;
+  timeFormat: TimeFormat;
+  countdownMs: number | null;
   onRemove: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: entry.id });
@@ -312,12 +386,7 @@ function QueueRow({
           <span aria-hidden="true" className="text-slate-300">
             ⠿
           </span>
-          <span>
-            {formatTimeOfDay(entry.expectedStartAt, timeFormat)}
-            {isFirst && countdownMs !== null && (
-              <span className="ml-2 text-xs tabular-nums text-slate-400">(in {formatDuration(countdownMs)})</span>
-            )}
-          </span>
+          <StartsAtCell expectedAt={expectedAt} timeFormat={timeFormat} countdownMs={countdownMs} />
         </div>
       </td>
       <td className="px-4 py-3 font-medium text-slate-900">
@@ -336,6 +405,92 @@ function QueueRow({
           </button>
         </div>
       </td>
+    </tr>
+  );
+}
+
+/** A real, already-materialized ScheduledItem that isn't draggable (due/schedule-fired) --
+ * same shape as ManualQueueRow, minus the drag handle, plus a "Scheduled" tag. */
+function StaticQueueRow({
+  expectedAt,
+  timeFormat,
+  countdownMs,
+  title,
+  artist,
+  mediaKind,
+  durationMs,
+  tagLabel,
+  onRemove,
+}: {
+  expectedAt: number;
+  timeFormat: TimeFormat;
+  countdownMs: number | null;
+  title: string;
+  artist: string | null;
+  mediaKind: QueueEntryDTO["mediaKind"];
+  durationMs: number;
+  tagLabel: string;
+  onRemove: () => void;
+}) {
+  return (
+    <tr className="bg-slate-50/50">
+      <td className="px-4 py-3 text-slate-600">
+        <StartsAtCell expectedAt={expectedAt} timeFormat={timeFormat} countdownMs={countdownMs} />
+      </td>
+      <td className="px-4 py-3 font-medium text-slate-900">
+        <div className="flex items-center gap-2">
+          <span>
+            {title}
+            {artist && <span className="ml-2 font-normal text-slate-500">{artist}</span>}
+          </span>
+          <ScheduledTag label={tagLabel} />
+        </div>
+      </td>
+      <td className="px-4 py-3">
+        <MediaKindBadge kind={mediaKind} />
+      </td>
+      <td className="px-4 py-3 text-slate-600">{formatDuration(durationMs)}</td>
+      <td className="px-4 py-3">
+        <div className="flex justify-end">
+          <button type="button" onClick={onRemove} className={rowActionButtonDanger}>
+            Remove
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+/** A not-yet-fired ScheduleRule/ExternalStream preview -- read-only, nothing to remove yet. */
+function TriggerPreviewRow({
+  expectedAt,
+  timeFormat,
+  countdownMs,
+  trigger,
+}: {
+  expectedAt: number;
+  timeFormat: TimeFormat;
+  countdownMs: number | null;
+  trigger: UpcomingTriggerDTO;
+}) {
+  return (
+    <tr className="bg-slate-50/50">
+      <td className="px-4 py-3 text-slate-600">
+        <StartsAtCell expectedAt={expectedAt} timeFormat={timeFormat} countdownMs={countdownMs} />
+      </td>
+      <td className="px-4 py-3 font-medium text-slate-500 italic">
+        <div className="flex items-center gap-2">
+          <span>{trigger.name}</span>
+          <ScheduledTag label={trigger.kind === "SCHEDULE_RULE" ? "Scheduled" : "External stream"} />
+        </div>
+      </td>
+      <td className="px-4 py-3 text-slate-400">
+        {trigger.kind === "SCHEDULE_RULE"
+          ? `${trigger.itemCount ?? 0} item${trigger.itemCount === 1 ? "" : "s"}`
+          : "Relay"}
+      </td>
+      <td className="px-4 py-3 text-slate-400">—</td>
+      <td className="px-4 py-3" />
     </tr>
   );
 }

@@ -1,14 +1,18 @@
 import { Router } from "express";
 import { z } from "zod";
-import { Prisma, prisma } from "@spectado/database";
+import { Prisma, prisma, type ScheduleTriggerType } from "@spectado/database";
 import {
   CreateQueueEntryRequestSchema,
   PlaybackModeSchema,
   QueueEntrySchema,
-  type MediaKind,
+  UpcomingTriggerSchema,
   type QueueEntryDTO,
+  type UpcomingTriggerDTO,
 } from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
+import { findActiveMedia } from "../../lib/media.js";
+import { UPCOMING_TRIGGER_WINDOW_MS } from "../../scheduler/constants.js";
+import { computeNextOccurrence } from "../../scheduler/triggerEngine.js";
 import {
   publishAdvanceCommand,
   publishJinglePlayCommand,
@@ -21,15 +25,16 @@ export const queueRoutes = Router();
 
 queueRoutes.use(requireAuth, requireRole("MANAGER", "ADMIN"));
 
-const queueEntryInclude = {
+export const queueEntryInclude = {
   song: true,
   jingle: true,
   ad: true,
+  scheduleRule: { select: { name: true } },
 } satisfies Prisma.ScheduledItemInclude;
 
-type QueueEntryWithIncludes = Prisma.ScheduledItemGetPayload<{ include: typeof queueEntryInclude }>;
+export type QueueEntryWithIncludes = Prisma.ScheduledItemGetPayload<{ include: typeof queueEntryInclude }>;
 
-function toQueueEntryDTO(item: QueueEntryWithIncludes): QueueEntryDTO {
+export function toQueueEntryDTO(item: QueueEntryWithIncludes): QueueEntryDTO {
   const media = item.song ?? item.jingle ?? item.ad;
   if (!media) {
     throw new Error(`ScheduledItem ${item.id} has no song/jingle/ad attached`);
@@ -44,26 +49,86 @@ function toQueueEntryDTO(item: QueueEntryWithIncludes): QueueEntryDTO {
     scheduledFor: item.scheduledFor?.toISOString() ?? null,
     status: item.status,
     addedAt: item.createdAt.toISOString(),
+    scheduleRuleName: item.scheduleRule?.name ?? null,
   };
 }
 
-// Manual queue: only PENDING, unscheduled (scheduledFor: null) items, FIFO by
-// `position`. Time-scheduled items (the not-yet-built Schedule feature) would
-// have a non-null scheduledFor and are deliberately excluded here.
+// Due (scheduledFor <= now, materialized by a ScheduleRule firing) items always outrank the
+// manual queue (scheduledFor: null) -- same priority order as internal/playback/next's
+// claimNextQueueItem -- so a manager sees a fired-but-not-yet-claimed block ahead of whatever's
+// manually queued behind it.
 queueRoutes.get("/", async (_req, res) => {
-  const items = await prisma.scheduledItem.findMany({
-    where: { status: "PENDING", scheduledFor: null },
-    include: queueEntryInclude,
-    orderBy: { position: "asc" },
-  });
+  const now = new Date();
+  const [due, manual] = await Promise.all([
+    prisma.scheduledItem.findMany({
+      where: { status: "PENDING", scheduledFor: { lte: now } },
+      include: queueEntryInclude,
+      orderBy: [{ scheduledFor: "asc" }, { position: "asc" }],
+    }),
+    prisma.scheduledItem.findMany({
+      where: { status: "PENDING", scheduledFor: null },
+      include: queueEntryInclude,
+      orderBy: { position: "asc" },
+    }),
+  ]);
+
+  const items = [...due, ...manual];
   res.json(items.map((item) => QueueEntrySchema.parse(toQueueEntryDTO(item))));
 });
 
-async function findActiveMedia(mediaKind: MediaKind, mediaId: string) {
-  if (mediaKind === "SONG") return prisma.song.findUnique({ where: { id: mediaId } });
-  if (mediaKind === "JINGLE") return prisma.jingle.findUnique({ where: { id: mediaId } });
-  return prisma.ad.findUnique({ where: { id: mediaId } });
-}
+const UPCOMING_TRIGGER_TYPES: ScheduleTriggerType[] = ["ONE_TIME", "WEEKLY", "INTERVAL"];
+
+// Not-yet-fired ScheduleRule/ExternalStream previews within the lookahead window -- distinct
+// from the real, already-materialized rows GET "/" returns above. See
+// packages/shared-types/src/dto/upcoming-trigger.ts and apps/api/src/scheduler/triggerEngine.ts's
+// computeNextOccurrence for why PLAY_COUNT never appears here.
+queueRoutes.get("/upcoming-triggers", async (_req, res) => {
+  const now = new Date();
+  const windowEnd = new Date(now.getTime() + UPCOMING_TRIGGER_WINDOW_MS);
+
+  const [rules, streams] = await Promise.all([
+    prisma.scheduleRule.findMany({
+      where: { isActive: true, triggerType: { in: UPCOMING_TRIGGER_TYPES } },
+      include: { _count: { select: { items: true } } },
+    }),
+    prisma.externalStream.findMany({
+      where: { status: { in: ["SCHEDULED", "STOPPED"] }, triggerType: { in: UPCOMING_TRIGGER_TYPES } },
+    }),
+  ]);
+
+  const triggers: UpcomingTriggerDTO[] = [];
+
+  for (const rule of rules) {
+    const next = computeNextOccurrence(rule, now);
+    if (next && next <= windowEnd) {
+      triggers.push({
+        kind: "SCHEDULE_RULE",
+        id: rule.id,
+        name: rule.name,
+        expectedAt: next.toISOString(),
+        insertionMode: rule.insertionMode,
+        itemCount: rule._count.items,
+      });
+    }
+  }
+
+  for (const stream of streams) {
+    const next = computeNextOccurrence(stream, now);
+    if (next && next <= windowEnd) {
+      triggers.push({
+        kind: "EXTERNAL_STREAM",
+        id: stream.id,
+        name: stream.name,
+        expectedAt: next.toISOString(),
+        insertionMode: stream.insertionMode,
+        itemCount: null,
+      });
+    }
+  }
+
+  triggers.sort((a, b) => a.expectedAt.localeCompare(b.expectedAt));
+  res.json(triggers.map((t) => UpcomingTriggerSchema.parse(t)));
+});
 
 queueRoutes.post("/items", async (req, res) => {
   const parsed = CreateQueueEntryRequestSchema.safeParse(req.body);

@@ -1,4 +1,11 @@
-import { HeartbeatStatusSchema, NATS_SUBJECTS, NATS_WILDCARDS, NowPlayingStatusSchema } from "@spectado/shared-types";
+import { prisma } from "@spectado/database";
+import {
+  HeartbeatStatusSchema,
+  NATS_SUBJECTS,
+  NATS_WILDCARDS,
+  NowPlayingStatusSchema,
+  RelayEndedStatusSchema,
+} from "@spectado/shared-types";
 import { logger } from "../logger.js";
 import { setNowPlaying } from "../modules/nowPlaying/nowPlayingCache.js";
 import { setLatestHeartbeat } from "../modules/status/heartbeatCache.js";
@@ -14,8 +21,8 @@ import { subscribeRaw } from "./client.js";
  * will query. Not implemented yet; Redis is currently the only now-playing
  * source of truth. heartbeat is kept in an in-memory cache (see
  * modules/status/heartbeatCache.ts) for the system status page; the
- * remaining status subjects (jingle/live/relay started|ended, error,
- * commandAck) are only logged for now.
+ * remaining status subjects (jingle/live started|ended, error, commandAck)
+ * are only logged for now.
  */
 export function startEncoderStatusSubscriber(): void {
   subscribeRaw(NATS_WILDCARDS.encoderStatus, async (subject, data) => {
@@ -36,6 +43,22 @@ export function startEncoderStatusSubscriber(): void {
         return;
       }
       setLatestHeartbeat(parsed.data);
+      return;
+    }
+
+    // ExternalStream.endBehavior = NATURAL relies on this (rather than the scheduler
+    // ticker) to know when a PLAYING relay actually stopped -- see
+    // apps/api/src/scheduler/externalStreamScheduler.ts.
+    if (subject === NATS_SUBJECTS.encoderStatus.relayEnded) {
+      const parsed = RelayEndedStatusSchema.safeParse(data);
+      if (!parsed.success) {
+        logger.warn({ subject, issues: parsed.error.issues }, "[nats] invalid relayEnded status payload");
+        return;
+      }
+      await prisma.externalStream.updateMany({
+        where: { id: parsed.data.relayId, status: "PLAYING" },
+        data: { status: "STOPPED" },
+      });
       return;
     }
 

@@ -6,14 +6,16 @@ queue, jingles, live mic input, and external stream relays. Everything runs as a
 
 > **Status:** this repository is currently a **scaffold**. The full infrastructure, data model, and service wiring
 > are real and verified working end-to-end (see [Implementation status](#implementation-status)). The manual
-> playback queue and standalone jingle overlay are now real too (real ffmpeg decode/ducking, not a simulation) —
-> most of what's left stubbed is clock wheels/scheduling, live mic mixing, and external relay switching. See that
-> section before assuming a feature works.
+> playback queue, standalone jingle overlay, and the Schedule/External Streams feature (recurring/one-off
+> song-jingle-ad blocks and relay triggers, real scheduler + NATS commands) are now real too — most of what's left
+> stubbed is clock wheels, live mic mixing, and the encoder's actual external-relay audio decode. See that section
+> before assuming a feature works.
 
 ## Contents
 
 - [How it works](#how-it-works)
 - [Architecture](#architecture)
+- [Data model](#data-model)
 - [Repository layout](#repository-layout)
 - [Prerequisites](#prerequisites)
 - [Getting started (local development)](#getting-started-local-development)
@@ -30,10 +32,11 @@ queue, jingles, live mic input, and external stream relays. Everything runs as a
    Prisma.
 2. **Queue resolution**: the encoder asks the API "what's next" (`GET /internal/playback/next`) whenever it needs to
    advance — at boot, when the current item finishes, on an explicit skip/start, or after a short retry delay while
-   the queue is empty. Today that resolves the **manual queue** only: a manager adds any song/jingle/ad to a simple
-   FIFO (search on the Queue page, or an "Add to queue" button in each library page), and items are dequeued and
-   played back-to-back in insertion order. (Clock-wheel/schedule/separation-rule resolution — automatically filling
-   the queue from rotation rules instead of manual adds — is still a stub, see below.) The result is a signed,
+   the queue is empty. That resolves, in priority order: any due **Schedule** items (real — a recurring/one-off
+   song-jingle-ad block fired by its rule, see below) ahead of the **manual queue** (a manager adds any song/jingle/ad
+   to a simple FIFO — search on the Queue page, or an "Add to queue" button in each library page); both drain
+   one item after another in the same way. (Clock-wheel/separation-rule resolution — automatically filling the
+   queue from rotation rules instead of manual/scheduled adds — is still a stub, see below.) The result is a signed,
    time-limited MinIO URL the encoder decodes directly via ffmpeg — it never holds storage credentials itself. When
    the queue is empty, the encoder falls back to real silence (not a filler tone).
 3. **Encoding**: the encoder mixes whatever should currently be audible (queue track, jingle overlay, live mic
@@ -111,6 +114,230 @@ encoder only ever receives a short-lived presigned URL.
 | Redis                   | —                                             | Now-playing cache for the public player                                                                                   |
 | MinIO                   | S3-compatible                                 | Song/jingle/cover-art storage (internal only; swappable for any S3-compatible provider)                                   |
 | NATS                    | —                                             | Realtime command/status bus, with websocket for the browser                                                               |
+
+## Data model
+
+`packages/database/prisma/schema.prisma` is the source of truth — this diagram mirrors it but will drift as the
+schema evolves, so treat the schema file as authoritative on conflict. A few cross-cutting patterns worth knowing
+before reading it:
+
+- Most models also carry `createdAt` (and, where mutable, `updatedAt`) timestamps; omitted below for brevity.
+- `Song`/`Jingle`/`Ad`/`ScheduledItem`/`ClockWheel`/`ScheduleRule`/`ExternalStream`/`PlaybackHistoryEntry` all carry
+  a nullable `stationId` — a multi-station scaffold reserved for a future release, unused in v1.
+- `ScheduleRule` and `ExternalStream` share the same trigger scalar fields (`triggerType`, `insertionMode`, `runAt`,
+  `weekdays`, `timeOfDay`, `intervalMinutes`, `windowStart`/`windowEnd`, `everyNPlays`/`playsSinceLastTrigger`,
+  `lastTriggeredAt`) — duplicated on both models rather than factored into a shared table, consistent with this
+  schema's existing preference for flat fields over generic/polymorphic join tables; omitted from the per-model
+  field lists below to avoid repeating them twice, see `apps/api/src/lib/scheduleTrigger.ts` for the shared
+  read/write mapping.
+- `StationSettings`, `ScratchPad`, and the `GLOBAL`-scoped `SeparationRule` are enforced as a single row by the
+  application layer (`findFirst`-or-create), not by a DB constraint.
+- `isActive` on `Song`/`Jingle`/`Ad` is a soft-disable flag, not a delete — it keeps history/FK references intact.
+- `PlaybackHistoryEntry` denormalizes `titleSnapshot`/`artistSnapshot` so playback history stays correct even if the
+  source `Song`/`Jingle` is later edited or soft-disabled.
+
+```mermaid
+erDiagram
+    User |o--o{ Song : "created by"
+    User |o--o{ Jingle : "created by"
+    User |o--o{ Ad : "created by"
+    User ||--o{ ScheduledItem : "created by"
+    User ||--o{ ScheduleRule : "created by"
+    User ||--o{ ExternalStream : "created by"
+    User |o--o{ SeparationRule : "last updated by"
+    User |o--o{ StationSettings : "last updated by"
+    User |o--o{ ScratchPad : "last updated by"
+    User |o--o{ CommandAuditLog : "issued by"
+
+    Category }o--o{ Song : categorizes
+    Category }o--o{ Jingle : categorizes
+    Category }o--o{ Ad : categorizes
+    Category |o--o{ ClockWheelStep : filters
+
+    Song |o--o{ ScheduledItem : queues
+    Jingle |o--o{ ScheduledItem : queues
+    Ad |o--o{ ScheduledItem : queues
+
+    Song |o--o{ ScheduleRuleItem : queues
+    Jingle |o--o{ ScheduleRuleItem : queues
+    Ad |o--o{ ScheduleRuleItem : queues
+    ScheduleRule ||--o{ ScheduleRuleItem : contains
+    ScheduleRule |o--o{ ScheduledItem : "materializes (fires)"
+
+    Song |o--o{ PlaybackHistoryEntry : plays
+    Jingle |o--o{ PlaybackHistoryEntry : plays
+    ExternalStream |o--o{ PlaybackHistoryEntry : plays
+    ScheduledItem |o--o{ PlaybackHistoryEntry : plays
+    ClockWheelStep |o--o{ PlaybackHistoryEntry : "picked via"
+
+    ClockWheel ||--o{ ClockWheelSlot : schedules
+    ClockWheel ||--o{ ClockWheelStep : contains
+    ClockWheel |o--o{ SeparationRule : scopes
+
+    User {
+        string id PK
+        string username UK
+        Role role
+        boolean isActive
+    }
+
+    Category {
+        string id PK
+        string name UK
+    }
+
+    Song {
+        string id PK
+        string title
+        string artist
+        string album
+        int durationMs
+        string fileKey UK
+        string coverArtKey
+        string tags "array"
+        boolean isActive
+        string createdById FK
+    }
+
+    Jingle {
+        string id PK
+        string title
+        JingleType type
+        string tags "array"
+        int durationMs
+        string fileKey UK
+        boolean isActive
+        string createdById FK
+    }
+
+    Ad {
+        string id PK
+        string title
+        int durationMs
+        string fileKey UK
+        datetime activeFrom
+        datetime activeUntil
+        boolean isActive
+        string createdById FK
+    }
+
+    ScheduledItem {
+        string id PK
+        datetime scheduledFor
+        int position
+        MediaKind mediaKind
+        string songId FK
+        string jingleId FK
+        string adId FK
+        ScheduledItemStatus status
+        string scheduleRuleId FK
+        string createdById FK
+        datetime playedAt
+    }
+
+    ScheduleRule {
+        string id PK
+        string name
+        boolean isActive
+        string createdById FK
+    }
+
+    ScheduleRuleItem {
+        string id PK
+        string scheduleRuleId FK
+        int order
+        MediaKind mediaKind
+        string songId FK
+        string jingleId FK
+        string adId FK
+    }
+
+    ClockWheel {
+        string id PK
+        string name
+        boolean isActive
+    }
+
+    ClockWheelSlot {
+        string id PK
+        string clockWheelId FK
+        int weekdays "array, 0=Sun"
+        time startTime
+        time endTime
+    }
+
+    ClockWheelStep {
+        string id PK
+        string clockWheelId FK
+        int order
+        MediaKind mediaKind
+        SelectionStrategy selectionStrategy
+        string categoryId FK
+        string tag
+    }
+
+    SeparationRule {
+        string id PK
+        SeparationRuleScope scope
+        string clockWheelId FK
+        int artistSeparationMinutes
+        int songSeparationMinutes
+        string updatedById FK
+    }
+
+    StationSettings {
+        string id PK
+        string name
+        string description
+        string logoKey
+        json links
+        string timeFormat
+        string updatedById FK
+    }
+
+    ScratchPad {
+        string id PK
+        json slots
+        string updatedById FK
+    }
+
+    ExternalStream {
+        string id PK
+        string name
+        string url
+        ExternalStreamStatus status
+        ExternalStreamEndBehavior endBehavior
+        datetime endAt
+        int durationMs
+        datetime startedAt
+        string createdById FK
+    }
+
+    PlaybackHistoryEntry {
+        string id PK
+        PlaybackMediaKind mediaKind
+        string songId FK
+        string jingleId FK
+        string externalStreamId FK
+        PlaybackSource source
+        string clockWheelStepId FK
+        string scheduledItemId FK
+        datetime startedAt
+        datetime endedAt
+        int durationMs
+        string titleSnapshot
+        string artistSnapshot
+    }
+
+    CommandAuditLog {
+        string id PK
+        string userId FK
+        string commandSubject
+        json payload
+        string result
+        datetime createdAt
+    }
+```
 
 ## Repository layout
 
@@ -308,16 +535,32 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
 - **12h/24h clock format** — a station-wide display preference (`StationSettings.timeFormat`, Settings → Station
   Settings → Display), read via `useTimeFormat()` and applied everywhere a clock time is rendered (Dashboard,
   Queue, Schedule, Ads, External Streams, Separation Rules).
+- **Schedule** (`ScheduleRule`/`ScheduleRuleItem`) — manager-defined blocks of one or more songs/jingles/ads,
+  triggered by a specific date/time, a weekly day+time, a recurring interval (optionally within a daily window), or
+  every N songs played, each with an `ASAP` (finish the current item first) or `AT_TIME` (interrupt immediately)
+  insertion mode. A scheduler tick (`apps/api/src/scheduler/`, every 15s, plus an event-driven hook for the
+  play-count trigger) evaluates due rules, materializes `ScheduledItem` rows (which `GET /internal/playback/next`
+  now prefers over the manual queue), and — for `AT_TIME` — publishes a real `advance` command to interrupt
+  playback immediately. Full CRUD + an ordered drag-to-reorder item picker on the Schedule page.
+- **External Streams** (`ExternalStream`) — the same trigger/insertion model as Schedule, plus an independent end
+  behavior: stop naturally (on-demand EOF or a live disconnect, reported by the encoder's `relay.ended` status) or
+  force-stop at an absolute time or after a duration. The same scheduler tick publishes real, audited
+  `relay.start`/`relay.stop` NATS commands at the right moment (verified end-to-end: `relayStart`'s `endAt` is
+  computed correctly for `AFTER_DURATION`, and the forced `relayStop` fires exactly on schedule). The encoder
+  receiving and acknowledging these commands is real; it decoding the relay URL into actual audio is not (see
+  Stubbed, below) — that's a separate, pre-existing gap in the audio pipeline, not in the scheduling logic.
 
 **Stubbed (real routes/modules exist, but return placeholder data or `501 Not Implemented`):**
 
-- Automatic queue resolution from rotation rules (time-scheduled one-off items → clock wheel → separation rules →
-  fallback category) — the manual queue above is real, but nothing yet auto-_fills_ it from a clock wheel or
-  enforces separation rules; an ad's `activeFrom`/`activeUntil` window is likewise only enforced at upload/edit
-  time, not when adding to the queue.
-- Clock wheels, scheduling, external streams CRUD.
-- Live mic mixing, external relay switching in the encoder — correct interfaces/state machines exist, but don't yet
-  act on the NATS commands they receive (jingle playback, above, is the one overlay that's real now).
+- Automatic queue resolution from rotation rules (clock wheel → separation rules → fallback category) — the manual
+  queue and Schedule above are both real, but nothing yet auto-_fills_ the queue from a clock wheel or enforces
+  separation rules; an ad's `activeFrom`/`activeUntil` window is likewise only enforced at upload/edit time, not
+  when adding to the queue.
+- Clock wheels CRUD.
+- Live mic mixing, external relay audio decode in the encoder (`apps/encoder/src/sources/relaySource.ts`,
+  `controllers/relayController.ts`) — correct interfaces/state machines exist, and `relayController` now receives
+  correctly-shaped `relay.start`/`relay.stop`/`relay.cancel` commands (see External Streams, above), but doesn't yet
+  act on them to produce real audio (jingle playback is the one overlay that's real now).
 
 ## Troubleshooting
 
