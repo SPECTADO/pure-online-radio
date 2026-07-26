@@ -1,22 +1,36 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { StreamCodec, StreamSettingsDTO } from "@spectado/shared-types";
 import type { EncoderConfig } from "../config.js";
 import type { Logger } from "../util/logger.js";
 import { FfmpegProcess } from "./ffmpegProcess.js";
 import { ProcessSupervisor } from "./processSupervisor.js";
 
-const HLS_SEGMENT_SECONDS = 4;
-const HLS_LIST_SIZE = 8;
+// ffmpeg's own HLS muxer has no partial-segment/EXT-X-PART capability at all
+// (verified against the actual installed build -- `ffmpeg -h muxer=hls` has
+// no such option in any version), so "low latency" here means forcing much
+// shorter *full* segments/list size instead of true sub-second LL-HLS.
+const LOW_LATENCY_SEGMENT_SECONDS = 1;
+const LOW_LATENCY_LIST_SIZE = 3;
+
+const CODEC_ENCODER_NAME: Record<StreamCodec, string> = {
+  AAC: "aac",
+  MP3: "libmp3lame",
+};
 
 /**
  * Builds the argv for the persistent HLS-encode ffmpeg process: reads raw
- * f32le PCM from the master FIFO, and produces two AAC variants (low 64k
- * mono/44100, high 256k stereo/48000) as an HLS master playlist + two
- * variant playlists under HLS_OUTPUT_DIR, via ffmpeg's -var_stream_map/%v
- * mechanism. Exported standalone (not just inlined in the class) so it can
- * be unit-tested without spawning anything.
+ * f32le PCM from the master FIFO, and produces two variants (low/high
+ * bitrate, same codec, low forced to mono/44100 and high to stereo/48000)
+ * as an HLS master playlist + two variant playlists under HLS_OUTPUT_DIR,
+ * via ffmpeg's -var_stream_map/%v mechanism. Exported standalone (not just
+ * inlined in the class) so it can be unit-tested without spawning anything.
  */
-export function buildMasterEncoderArgs(config: EncoderConfig): string[] {
+export function buildMasterEncoderArgs(config: EncoderConfig, stream: StreamSettingsDTO): string[] {
+  const encoderName = CODEC_ENCODER_NAME[stream.codec];
+  const segmentSeconds = stream.lowLatencyEnabled ? LOW_LATENCY_SEGMENT_SECONDS : stream.segmentSeconds;
+  const listSize = stream.lowLatencyEnabled ? LOW_LATENCY_LIST_SIZE : stream.segmentCount;
+
   return [
     "-nostdin",
     "-hide_banner",
@@ -38,9 +52,9 @@ export function buildMasterEncoderArgs(config: EncoderConfig): string[] {
     "-map",
     "[low_in]",
     "-c:a",
-    "aac",
+    encoderName,
     "-b:a",
-    "64k",
+    `${stream.lowBitrateKbps}k`,
     "-ar",
     "44100",
     "-ac",
@@ -49,9 +63,9 @@ export function buildMasterEncoderArgs(config: EncoderConfig): string[] {
     "-map",
     "[high_in]",
     "-c:a",
-    "aac",
+    encoderName,
     "-b:a",
-    "256k",
+    `${stream.highBitrateKbps}k`,
     "-ar",
     "48000",
     "-ac",
@@ -60,9 +74,9 @@ export function buildMasterEncoderArgs(config: EncoderConfig): string[] {
     "-f",
     "hls",
     "-hls_time",
-    String(HLS_SEGMENT_SECONDS),
+    String(segmentSeconds),
     "-hls_list_size",
-    String(HLS_LIST_SIZE),
+    String(listSize),
     "-hls_flags",
     "delete_segments+append_list+independent_segments+program_date_time",
     "-hls_segment_type",
@@ -89,13 +103,13 @@ export class MasterEncoder {
 
   constructor(
     private readonly config: EncoderConfig,
+    private readonly streamSettings: StreamSettingsDTO,
     private readonly logger: Logger,
   ) {
     this.supervisor = new ProcessSupervisor(() => this.createProcess(), this.logger.child({ component: "masterEncoder" }));
   }
 
   start(): void {
-    this.ensureOutputDirs();
     this.supervisor.start();
   }
 
@@ -108,17 +122,27 @@ export class MasterEncoder {
   }
 
   /**
-   * ffmpeg's HLS muxer does not create the `%v` variant subdirectories
-   * (low/, high/) on its own - it just opens files under whatever path is
-   * given, and fails if the directory doesn't exist yet.
+   * Wipes and recreates the `%v` variant subdirectories (low/, high/) before
+   * every fresh ffmpeg spawn -- both the initial boot and every
+   * ProcessSupervisor crash-restart, since this is the factory it calls each
+   * time. ffmpeg's own `delete_segments` flag only prunes segments its
+   * *current* process created; a segment left over from a previous process
+   * (crash mid-run, or a settings-change restart) would otherwise never be
+   * referenced by the new process's playlist and leak on disk forever. A
+   * crash already causes a real playback discontinuity, so clearing the
+   * directory here doesn't make that outage meaningfully worse.
    */
-  private ensureOutputDirs(): void {
-    fs.mkdirSync(path.join(this.config.hlsOutputDir, "low"), { recursive: true });
-    fs.mkdirSync(path.join(this.config.hlsOutputDir, "high"), { recursive: true });
+  private resetOutputDirs(): void {
+    for (const variant of ["low", "high"]) {
+      const dir = path.join(this.config.hlsOutputDir, variant);
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.mkdirSync(dir, { recursive: true });
+    }
   }
 
   private createProcess(): FfmpegProcess {
-    const args = buildMasterEncoderArgs(this.config);
+    this.resetOutputDirs();
+    const args = buildMasterEncoderArgs(this.config, this.streamSettings);
     const proc = new FfmpegProcess("ffmpeg", args, this.logger);
     proc.on("stderr", (line: string) => this.logger.debug({ line }, "ffmpeg[master]"));
     proc.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {

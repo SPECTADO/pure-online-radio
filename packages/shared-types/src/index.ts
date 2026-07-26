@@ -19,6 +19,7 @@ export * from "./dto/live-mic.js";
 export * from "./dto/station.js";
 export * from "./dto/scratch-pad.js";
 export * from "./dto/system-status.js";
+export * from "./dto/stream-settings.js";
 
 export * from "./nats/subjects.js";
 export * from "./nats/messages.js";

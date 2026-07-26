@@ -90,6 +90,11 @@ enum PlaybackMediaKind {
   LIVE_MIC
 }
 
+enum StreamCodec {
+  AAC
+  MP3
+}
+
 // ── Users / auth ─────────────────────────────────────────────────────────
 
 model User {
@@ -111,6 +116,7 @@ model User {
   updatedSeparationRules  SeparationRule[]
   updatedStationSettings  StationSettings[]
   updatedScratchPads      ScratchPad[]
+  updatedStreamSettings   StreamSettings[]
   commandAuditLogs        CommandAuditLog[]
 }
 
@@ -401,6 +407,28 @@ model StationSettings {
   updatedAt    DateTime @updatedAt
   updatedById  String?
   updatedBy    User?    @relation(fields: [updatedById], references: [id])
+}
+
+// ── Stream (HLS encode) settings ──────────────────────────────────────────
+// A single row (app enforces this via findFirst-or-create, same pattern as
+// StationSettings above). Read once by the encoder at boot to build its
+// ffmpeg HLS argv (see apps/encoder/src/process/masterEncoder.ts) -- there is
+// no live-reload path today, so a change here only takes effect the next
+// time the encoder process restarts.
+model StreamSettings {
+  id             String      @id @default(cuid())
+  codec          StreamCodec @default(AAC)
+  lowBitrateKbps  Int        @default(64)
+  highBitrateKbps Int        @default(256)
+  // Ignored in favor of a fixed short duration while lowLatencyEnabled is
+  // true -- see masterEncoder.ts. segmentSeconds * segmentCount is the
+  // live-edge/time-shift (DVR) window in both modes.
+  segmentSeconds    Int     @default(4)
+  segmentCount      Int     @default(8)
+  lowLatencyEnabled Boolean @default(false)
+  updatedAt      DateTime    @updatedAt
+  updatedById    String?
+  updatedBy      User?       @relation(fields: [updatedById], references: [id])
 }
 
 // 2x5 grid of manager-assignable jingle shortcuts on the Dashboard -- singleton

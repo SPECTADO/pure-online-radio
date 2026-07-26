@@ -3,6 +3,7 @@ import { Router } from "express";
 import { Prisma, prisma } from "@spectado/database";
 import {
   PlaybackDirectiveSchema,
+  StreamSettingsSchema,
   type PlaybackDirectiveDTO,
   type SilenceDirectiveDTO,
   type TrackDirectiveDTO,
@@ -11,6 +12,7 @@ import { internalOnly } from "../../middleware/internalOnly.js";
 import { getPresignedGetUrl } from "../../lib/storage.js";
 import { logger } from "../../logger.js";
 import { incrementSongPlayCountAndFire } from "../../scheduler/scheduleRuleScheduler.js";
+import { ensureStreamSettings, toStreamSettingsDTO } from "../settings/streamSettings.js";
 
 export const internalRoutes = Router();
 
@@ -131,6 +133,14 @@ async function toTrackDirective(item: ClaimedItem): Promise<TrackDirectiveDTO> {
     urlExpiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
   };
 }
+
+// Fetched once at encoder boot (apps/encoder/src/api/apiClient.ts) to build
+// its ffmpeg HLS argv -- there is no live-reload path, so this is a
+// boot-time-only read, not a poll.
+internalRoutes.get("/stream-settings", async (_req, res) => {
+  const settings = await ensureStreamSettings();
+  res.json(StreamSettingsSchema.parse(toStreamSettingsDTO(settings)));
+});
 
 internalRoutes.get("/playback/next", async (_req, res) => {
   const claimed = await claimNextQueueItem();

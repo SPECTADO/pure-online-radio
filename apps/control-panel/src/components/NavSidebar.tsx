@@ -45,6 +45,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Settings",
     children: [
       { to: "/settings/station", label: "Station Settings" },
+      { to: "/settings/stream", label: "Stream Settings" },
       { to: "/settings/queue-rules", label: "Queue Rules" },
       { to: "/settings/scratch-pad", label: "Scratch Pad" },
     ],

@@ -151,6 +151,7 @@ erDiagram
     User |o--o{ SeparationRule : "last updated by"
     User |o--o{ StationSettings : "last updated by"
     User |o--o{ ScratchPad : "last updated by"
+    User |o--o{ StreamSettings : "last updated by"
     User |o--o{ CommandAuditLog : "issued by"
 
     Category }o--o{ Song : categorizes
@@ -309,6 +310,17 @@ erDiagram
     ScratchPad {
         string id PK
         json slots
+        string updatedById FK
+    }
+
+    StreamSettings {
+        string id PK
+        StreamCodec codec
+        int lowBitrateKbps
+        int highBitrateKbps
+        int segmentSeconds
+        int segmentCount
+        boolean lowLatencyEnabled
         string updatedById FK
     }
 
@@ -583,6 +595,19 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   grid of which wheel is active when (default wheel as the base fill color, specific wheels as colored blocks);
   the Queue/Dashboard "Up Next" views tag clock-wheel-filled rows "Rotation" to distinguish them from manual/
   scheduled items.
+- **Stream Settings** (`StreamSettings`, Settings → Stream Settings) — codec (AAC/MP3), low/high variant bitrate,
+  HLS segment length + segment count (the live-edge/time-shift/DVR window is `segmentSeconds × segmentCount`), and a
+  Low Latency HLS toggle. The encoder fetches this singleton row once at boot (`GET /internal/stream-settings`,
+  retried a few times, falling back to the pipeline's original hardcoded values if the API never answers) and
+  builds its ffmpeg HLS argv from it — there is no live-reload path, so a saved change only takes effect the next
+  time the encoder process restarts (the settings page says so). "Low Latency HLS" does **not** mean true
+  partial-segment/LL-HLS: the installed ffmpeg's HLS muxer has no `EXT-X-PART`/`EXT-X-PRELOAD-HINT` capability at
+  all (verified directly against `ffmpeg -h muxer=hls`, not just docs), so the toggle instead forces a much shorter
+  fixed full-segment length/list size (~2-4s glass-to-glass instead of the usual ~16-32s), still standard mpegts
+  segments with no player-compatibility cost. Orphaned `.ts` segments that could previously accumulate forever
+  across encoder crash-restarts (ffmpeg's own `delete_segments` flag only prunes segments *its own* process
+  created — a fresh process after a crash never knew about the previous one's files) are now fixed by wiping and
+  recreating the output directories on every ffmpeg (re)spawn, not just the initial boot.
 
 **Stubbed (real routes/modules exist, but return placeholder data or `501 Not Implemented`):**
 

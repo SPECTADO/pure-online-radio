@@ -1,5 +1,7 @@
+import type { StreamSettingsDTO } from "@spectado/shared-types";
 import { loadConfig } from "./config.js";
 import { logger } from "./util/logger.js";
+import type { Logger } from "./util/logger.js";
 import { FifoWriter } from "./core/fifoWriter.js";
 import { Mixer } from "./core/mixer.js";
 import { SilenceSource } from "./sources/silenceSource.js";
@@ -8,17 +10,44 @@ import { NatsClient } from "./nats/natsClient.js";
 import { startCommandRouter } from "./nats/commandRouter.js";
 import { StatusPublisher } from "./nats/statusPublisher.js";
 import { HealthMonitor } from "./health/healthMonitor.js";
-import { ApiClient } from "./api/apiClient.js";
+import { ApiClient, DEFAULT_STREAM_SETTINGS } from "./api/apiClient.js";
 import { QueueController } from "./controllers/queueController.js";
 import { JingleController } from "./controllers/jingleController.js";
 import { LiveMicServer } from "./ws/liveMicServer.js";
+
+const BOOT_STREAM_SETTINGS_ATTEMPTS = 5;
+const BOOT_STREAM_SETTINGS_RETRY_DELAY_MS = 1000;
+
+/**
+ * Stream Settings (codec/bitrate/segment/low-latency) are read once here at
+ * boot, not polled -- there is no live-reload path today, so a change only
+ * takes effect the next time the encoder process restarts (see Settings ->
+ * Stream Settings in the control panel). Retries a few times since the API
+ * may not be up yet (same startup race as any other cross-service
+ * dependency in this stack), then falls back to the pipeline's original
+ * hardcoded defaults so a stream still comes up even if the API never
+ * answers.
+ */
+async function fetchStreamSettingsAtBoot(apiClient: ApiClient, logger: Logger): Promise<StreamSettingsDTO> {
+  for (let attempt = 1; attempt <= BOOT_STREAM_SETTINGS_ATTEMPTS; attempt++) {
+    const settings = await apiClient.fetchStreamSettings();
+    if (settings) return settings;
+    logger.warn({ attempt, of: BOOT_STREAM_SETTINGS_ATTEMPTS }, "could not fetch stream settings from API at boot; retrying");
+    await new Promise((resolve) => setTimeout(resolve, BOOT_STREAM_SETTINGS_RETRY_DELAY_MS));
+  }
+  logger.error("could not fetch stream settings from API after retries; falling back to defaults");
+  return DEFAULT_STREAM_SETTINGS;
+}
 
 async function main(): Promise<void> {
   const config = loadConfig();
   logger.info({ nodeEnv: config.nodeEnv, hlsOutputDir: config.hlsOutputDir, fifoPath: config.pcmFifoPath }, "starting spectado encoder");
 
   // --- the one thing that must genuinely work: FIFO -> mixer output -> ffmpeg HLS encode ---
-  const masterEncoder = new MasterEncoder(config, logger);
+  const apiClient = new ApiClient(config, logger);
+  const streamSettings = await fetchStreamSettingsAtBoot(apiClient, logger);
+  logger.info({ streamSettings }, "using stream settings");
+  const masterEncoder = new MasterEncoder(config, streamSettings, logger);
   masterEncoder.start();
 
   const healthMonitor = new HealthMonitor(masterEncoder);
@@ -37,7 +66,6 @@ async function main(): Promise<void> {
 
   // --- playback queue: real ffmpeg-decoded audio, one queue item after
   // another, falling back to silence when the queue empties ---
-  const apiClient = new ApiClient(config, logger);
   const queueController = new QueueController(mixer, apiClient, statusPublisher, logger);
   const jingleController = new JingleController(mixer, statusPublisher, logger);
   startCommandRouter(natsClient, logger, { queueController, jingleController });
