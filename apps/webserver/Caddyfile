@@ -1,0 +1,259 @@
+# Bind-mounted (see docker-compose.yml), not baked into the image -- edit
+# this file and `docker compose restart webserver` to apply changes, no
+# rebuild needed. This is the single public HTTP(S) entry point: static SPAs,
+# API/HLS/NATS-ws/live-mic-ws reverse proxy. Read the README's Architecture
+# and Troubleshooting sections before changing routing here.
+{
+	# SITE_ADDRESS/ACME_EMAIL are always given real values by docker-compose.yml
+	# (defaulted there, not here) -- `{$VAR}` substitution is a raw text
+	# replace over this file before parsing, so a genuinely unset/empty var
+	# would delete the token outright and fail to parse, not merely produce
+	# an empty argument.
+	email {$ACME_EMAIL}
+}
+
+# Internal-only loopback server, purely so the *.m4s handle block below can
+# front it with reverse_proxy instead of file_server directly -- verified
+# directly against this exact Caddy version: file_server's own 416 (invalid
+# Range) response is written straight through Go's stdlib http.Error(), which
+# bypasses Caddy's handle_errors pipeline entirely (unlike a Go handler error),
+# so a site-wide handle_errors block can never see or remap it. reverse_proxy's
+# own handle_response *can* match and remap an upstream status code, so this
+# loopback hop exists solely to get file_server's response through that door.
+# Bound to loopback only (not the edge network) -- nothing outside this
+# container can reach it either way. Explicit `http://` deliberately --
+# verified directly, Caddy applies the same "auto-HTTPS with its own
+# internal CA, redirecting HTTP->HTTPS" treatment to loopback addresses as
+# it does "localhost", which would make reverse_proxy below receive a
+# redirect instead of the file it's asking for.
+http://127.0.0.1:9991 {
+	root * /var/www/hls
+	file_server
+}
+
+# This one line is the entire "SSL is optional" switch. docker-compose.yml
+# defaults SITE_ADDRESS to "http://:80" -- a hostname-less address is Caddy's
+# actual equivalent of nginx's `server_name _` catch-all (matches any Host
+# header on this port), which this stack genuinely needs: this same
+# container is reached as "webserver" by the Vite dev-server proxies,
+# "localhost" (or a real domain) by a browser, and a hostname-scoped address
+# like bare "localhost" would only answer one of those, empty-200ing every
+# other Host header (verified directly). The explicit `http://` matters too
+# -- Caddy does NOT serve plain HTTP by default even for a bare `:80`; it
+# still enables automatic HTTPS (redirect included) via its own internal,
+# browser-untrusted CA unless a scheme unconditionally turns that off. Set
+# SITE_ADDRESS to your real public domain (bare, no scheme, with DNS + ports
+# 80/443 reachable) in .env to get a free auto-renewing Let's Encrypt cert
+# instead -- that case legitimately wants Host-based matching, since the
+# cert itself is scoped to that one hostname anyway.
+{$SITE_ADDRESS:http://:80} {
+	log {
+		output stdout
+		format console
+	}
+
+	# Deliberately NOT a blanket top-level `encode gzip` -- verified directly,
+	# gzip and byte-range requests don't mix (a Range is meaningless against
+	# compressed output), and Caddy's compression middleware resolves that
+	# conflict by just ignoring the Range header and serving the full file
+	# with 200 instead of 206, which silently breaks every LL-HLS .m4s
+	# fetch. nginx's original gzip_types allowlist never hit this because it
+	# only ever named text-ish mime types, never the HLS ones -- scoping
+	# encode per-block below to only the text-ish responses (JSON, JS/CSS,
+	# HTML) reproduces that same allowlist intent instead of an exclude-list
+	# that's one missed extension away from silently breaking again.
+
+	# Served from a container-local writable path (NOT the read-only
+	# static_assets volume) since the entrypoint generates this file fresh on
+	# every container start.
+	handle /env-config.js {
+		root * /etc/caddy/generated
+		header Cache-Control "no-store"
+		file_server
+	}
+
+	# --- API reverse proxy ---
+	handle /api/* {
+		encode gzip
+		uri strip_prefix /api
+		reverse_proxy api:3000
+	}
+
+	# --- NATS websocket (realtime status for the control panel, subscribe-only credential) ---
+	handle /realtime/* {
+		uri strip_prefix /realtime
+		reverse_proxy nats:9222
+	}
+
+	# --- Encoder live-mic ingestion websocket ---
+	handle /live-mic/* {
+		uri strip_prefix /live-mic
+		reverse_proxy encoder:8080
+	}
+
+	# Bare "/manage" (no trailing slash) does NOT match the "/manage/" handle
+	# below -- same reasoning as nginx's equivalent redirect had: without
+	# this, it falls through to the player SPA's catch-all handle instead of
+	# the control panel, no error either way, just the wrong app.
+	# {http.request.hostport} (not {http.request.host}) deliberately -- verified
+	# directly, {http.request.host} drops the port just like nginx's $host
+	# would, building the redirect against the wrong origin whenever the
+	# externally-mapped WEBSERVER_HOST_PORT isn't the default 80.
+	redir /manage {http.request.scheme}://{http.request.hostport}/manage/ 301
+
+	# --- HLS output (written by the encoder into the shared hls_output volume) ---
+	# `handle`'s inline matcher shorthand only accepts a leading-`/` path or a
+	# named `@matcher` -- a bare extension glob needs the latter.
+	@m3u8 path *.m3u8
+	handle @m3u8 {
+		root * /var/www/hls
+		header Cache-Control "no-store"
+		header Access-Control-Allow-Origin "*"
+		header Content-Type "application/vnd.apple.mpegurl"
+		file_server
+	}
+
+	# A fixed, conservative bound rather than something tied to the (now
+	# user-configurable, Settings -> Stream Settings) segment length/count:
+	# ffmpeg's segment_%08d.ts filenames restart from 0 on every fresh
+	# process (a crash-restart, or a settings change taking effect on the
+	# next encoder restart), so the same path can legitimately hold
+	# different audio bytes across the encoder's lifetime -- an
+	# intermediate cache holding a previous generation's response past its
+	# own restart would otherwise serve stale/wrong audio for a reused
+	# filename, not just a harmlessly-pruned-but-still-correct one.
+	@tsFile path *.ts
+	handle @tsFile {
+		root * /var/www/hls
+		header Cache-Control "public, max-age=30"
+		header Access-Control-Allow-Origin "*"
+		header Content-Type "video/mp2t"
+		file_server
+	}
+
+	# Real Low Latency HLS (Settings -> Stream Settings): fMP4/CMAF output
+	# from the gpac-based pipeline (apps/encoder/src/process/llHlsEncoder.ts).
+	# `.m4s` parts/segments are requested via ordinary HTTP Range requests
+	# against a file gpac may still be actively appending to. Fronted via
+	# reverse_proxy to the loopback file_server above (not file_server
+	# directly) specifically to reach the 416 remap below -- see that
+	# server block's comment for why.
+	#
+	# A plain (non-Range) GET against the segment gpac is still actively
+	# writing is a *worse* failure mode than the 416 below and reproduced
+	# directly against the running stack: the file server has no way to
+	# know the file will keep growing, so it happily answers 200 with
+	# whatever bytes exist right now -- e.g. a genuine `Content-Length:
+	# 17022` for a segment whose final size, moments later once gpac
+	# finishes it, was `170172`. No error, no truncation signal, nothing
+	# for a client to retry -- it looks exactly like a short, complete
+	# segment. Safari's native HLS player does exactly this (confirmed via
+	# Caddy access logs during a real repro: bursts of plain GETs
+	# alongside the expected Range-based part fetches), decodes the sliver
+	# it got, and stalls once it runs out -- "plays ~1s then stuck," fixed
+	# by a reload because the *next* attempt's target segments have since
+	# finished. hls.js never triggers this (verified: it only ever issued
+	# Range requests for .m4s in testing), so requiring Range unconditionally
+	# costs it nothing. A missing Range header gets the same retryable 503
+	# as the 416 case below -- both are "ask again in a moment," not a
+	# request Caddy can satisfy safely right now.
+	@m4sFileNoRange {
+		path *.m4s
+		not header Range *
+	}
+	handle @m4sFileNoRange {
+		header Access-Control-Allow-Origin "*"
+		respond "" 503
+	}
+
+	@m4sFile path *.m4s
+	handle @m4sFile {
+		header Cache-Control "public, max-age=30"
+		header Access-Control-Allow-Origin "*"
+		# gpac can publish a playlist's EXT-X-PRELOAD-HINT/EXT-X-PART byte
+		# offset a moment before that offset is actually flushed to the
+		# .m4s file -- reproduced directly against the running stack: a
+		# Range request for the just-announced offset gets a hard 416
+		# because the file hasn't grown that far yet. The part always
+		# lands within one PART-TARGET later, but hls.js's default retry
+		# policy treats every 4xx as permanent and never retries a 416 --
+		# it just gives up on the fragment, silently starving the buffer
+		# with no fatal error for the player's reconnect logic to catch
+		# ("plays ~1s then stuck until you stop/restart"). Remapping to
+		# 503 puts it in hls.js's retryable range so its normal errorRetry
+		# backoff (~1s) retries and succeeds once gpac catches up.
+		reverse_proxy 127.0.0.1:9991 {
+			# reverse_proxy preserves the original inbound Host header by
+			# default -- verified directly, without this the loopback
+			# server above (whose site address IS "127.0.0.1:9991") never
+			# matches the client's real Host (e.g. "localhost:8000") and
+			# silently falls through to an empty 200, not the file at all.
+			header_up Host 127.0.0.1:9991
+			# header_down (not the outer site's `header` directive) -- the
+			# loopback file_server already sets its own Content-Type on the
+			# proxied response, and verified directly, layering a top-level
+			# `header` override on top of an already-proxied header produces
+			# a duplicate Content-Type rather than replacing it.
+			header_down Content-Type "video/iso.segment"
+			@partNotReady status 416
+			handle_response @partNotReady {
+				respond "" 503
+			}
+		}
+	}
+
+	@mp4File path *.mp4
+	handle @mp4File {
+		root * /var/www/hls
+		header Cache-Control "public, max-age=30"
+		header Access-Control-Allow-Origin "*"
+		header Content-Type "audio/mp4"
+		file_server
+	}
+
+	# Long-lived hashed assets get aggressive caching -- scoped separately per
+	# SPA (rather than one generic assets matcher) since the two apps' built
+	# output lives under different subdirectories of the static_assets volume.
+	handle /assets/* {
+		encode gzip
+		root * /srv/player
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	handle /manage/assets/* {
+		encode gzip
+		root * /srv/control-panel
+		uri strip_prefix /manage
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	# --- Control panel SPA (path-scoped: same origin as the API, no CORS needed) ---
+	handle /manage/* {
+		encode gzip
+		root * /srv/control-panel
+		uri strip_prefix /manage
+		# try_files (a rewrite) must run before the header matcher below so
+		# a client-route fallback (e.g. /manage/queue -> /manage/index.html)
+		# is also caught by it, not just a literal /manage/index.html
+		# request -- Caddy auto-sorts directives by default, which would
+		# otherwise silently reorder these; `route` pins the written order.
+		route {
+			try_files {path} /index.html
+			header /index.html Cache-Control "no-cache"
+			file_server
+		}
+	}
+
+	# --- Public player SPA (served at root) ---
+	handle {
+		encode gzip
+		root * /srv/player
+		route {
+			try_files {path} /index.html
+			header /index.html Cache-Control "no-cache"
+			file_server
+		}
+	}
+}

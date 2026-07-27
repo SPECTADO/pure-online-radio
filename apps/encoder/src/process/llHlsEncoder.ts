@@ -89,6 +89,23 @@ export function buildLlEncodeArgs(config: EncoderConfig, stream: StreamSettingsD
  * segmentSeconds * segmentCount, same meaning as the standard pipeline's
  * hls_list_size -- verified during the feasibility spike to actually prune
  * old segments once exceeded (GPAC's own keep_segs=false default).
+ *
+ * `seg_sync=yes` (GPAC's default is `auto`, "wait for HLS") is explicit, not
+ * decorative -- despite `auto` already claiming to wait for a fragment's
+ * last byte before announcing it for HLS output, we reproduced the exact
+ * failure this option describes ("temporary mismatches between
+ * segment/part size currently received versus size as advertized in
+ * manifest") against a live stream: a byte-range request for a
+ * just-announced EXT-X-PART/PRELOAD-HINT offset intermittently 416'd
+ * because the file hadn't grown that far *on disk* yet, and — worse for
+ * Safari's native HLS player specifically — a full (non-Range) GET against
+ * an in-progress segment returned a "complete-looking" 200 with a
+ * Content-Length smaller than the segment's final size, i.e. truncated
+ * audio silently served as whole. Forcing `yes` explicitly (rather than
+ * trusting `auto`'s HLS auto-detection to already cover this) is the
+ * server-not-required fix for both; see the README LL-HLS section and
+ * apps/webserver/Caddyfile's `.m4s` handling for the belt-and-suspenders
+ * webserver-side mitigation that remains for whatever race window persists.
  */
 export function buildGpacArgs(config: EncoderConfig, stream: StreamSettingsDTO, lowFifoPath: string, highFifoPath: string): string[] {
   const cdur = partSecondsFor(stream.segmentSeconds);
@@ -101,7 +118,7 @@ export function buildGpacArgs(config: EncoderConfig, stream: StreamSettingsDTO, 
     "-i",
     `${highFifoPath}:ext=aac:#Bandwidth=${stream.highBitrateKbps * 1000}:#HLSPL=high/playlist.m3u8`,
     "-o",
-    `${masterPath}:segdur=${stream.segmentSeconds}:cdur=${cdur}:llhls=br:dmode=dynamic:tsb=${tsb}`,
+    `${masterPath}:segdur=${stream.segmentSeconds}:cdur=${cdur}:llhls=br:dmode=dynamic:tsb=${tsb}:seg_sync=yes`,
   ];
 }
 

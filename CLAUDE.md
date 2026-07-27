@@ -38,9 +38,10 @@ whenever you implement one of the stubs for real.
 - If you edit source in `apps/api`/`apps/encoder` while the stack is running and the change doesn't seem to apply,
   don't assume the fix is wrong first — run `docker compose restart <service>`. Docker Desktop's bind-mount file
   watching doesn't always propagate host-side edits into `tsx watch` reliably.
-- After changing anything in `apps/webserver/nginx/` or `infra/docker/nats/`, rebuild the image
-  (`docker compose build webserver` / `nats`) — these aren't fully bind-mounted, so a plain restart can silently run
-  stale config.
+- After changing anything in `infra/docker/nats/`, rebuild the image (`docker compose build nats`) — it isn't fully
+  bind-mounted, so a plain restart can silently run stale config. `apps/webserver/Caddyfile` is the opposite: it's
+  bind-mounted directly (not baked into the image), so editing it only needs `docker compose restart webserver` —
+  no rebuild.
 - Rotating a secret in `.env` does **not** retroactively update an already-initialized Postgres/MinIO container —
   see the README's "Rotated a password..." troubleshooting entry before assuming a fresh `.env` value is live
   everywhere.
@@ -57,6 +58,9 @@ whenever you implement one of the stubs for real.
   Change here first when adding an endpoint or message shape; don't redefine types locally in an app.
 - `packages/database/prisma/schema.prisma` — the full data model; migrations are real and committed under
   `prisma/migrations/` (not just a schema file waiting to be migrated).
-- `apps/webserver/nginx/conf.d/default.conf` — the only public HTTP surface. Has several deliberately non-obvious
-  patterns (lazy DNS resolution via `resolver` + variables, `rewrite ... break` ordering, path-scoped asset caching)
-  — read the comments in-file and the matching README Troubleshooting entries before changing it.
+- `apps/webserver/Caddyfile` — the only public HTTP(S) surface (Caddy, replacing an earlier nginx setup). Has several
+  deliberately non-obvious patterns (the site address must be a hostname-less `:80` to match every `Host` header
+  this stack legitimately sees, not just "localhost"; an internal loopback server + `reverse_proxy` hop exists
+  solely so `.m4s` byte-range errors can be remapped, since `file_server`'s own errors bypass `handle_errors`;
+  `encode gzip` is scoped per-route, not global, because it silently breaks Range requests) — read the comments
+  in-file and the matching README Troubleshooting entries before changing it.

@@ -10,6 +10,8 @@ volumes:
   minio_data:
   hls_output:
   static_assets:
+  caddy_data:
+  caddy_config:
 
 services:
   postgres:
@@ -202,10 +204,43 @@ services:
       encoder:
         condition: service_started
     volumes:
-      - "static_assets:/usr/share/nginx/html:ro"
+      - "./apps/webserver/Caddyfile:/etc/caddy/Caddyfile:ro"
+      - "static_assets:/srv:ro"
       - "hls_output:/var/www/hls:ro"
+      - "caddy_data:/data"
+      - "caddy_config:/config"
     environment:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      # Leave SITE_ADDRESS unset for local/LAN use -- plain HTTP on :80,
+      # matching nginx's old server_name _ catch-all. Set it to a real
+      # public domain name to turn on automatic Let's Encrypt HTTPS with no
+      # other config change; see the Caddyfile's top comment and the README
+      # Deployment section.
+      # Defaulted here rather than left to the Caddyfile's own env-var
+      # placeholders: `{$VAR}` substitution happens as a raw text replace
+      # over the Caddyfile before parsing, so an unset var doesn't just
+      # produce an empty argument -- it removes the token entirely, and
+      # Caddy fails to parse `email` (or a site address) with zero
+      # arguments. Defaulting here guarantees Caddy always sees a real,
+      # syntactically valid single token either way.
+      #
+      # `http://:80` (not "http://localhost") -- verified directly, a
+      # hostname-scoped Caddy site address (even "localhost") only matches
+      # requests whose Host header is literally that hostname. nginx's
+      # `server_name _` has no such restriction, and this stack genuinely
+      # needs that: the player-dev/control-panel-dev Vite proxies reach this
+      # container as "webserver" (its Docker service name), a real browser
+      # reaches it as "localhost" (or whatever domain), and neither should
+      # 404/empty-200 the other. A bare `:80` (any hostname, this port) is
+      # Caddy's actual equivalent of nginx's catch-all -- the explicit
+      # `http://` scheme is still required on top of that, since bare `:80`
+      # is otherwise still subject to the same automatic-HTTPS-with-internal-
+      # CA behavior described below.
+      SITE_ADDRESS: ${SITE_ADDRESS:-http://:80}
+      # example.invalid is IANA-reserved specifically for "obviously fake,
+      # never resolves/delivers" placeholders like this one.
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.invalid}
     networks: [edge]
     ports:
       - "${WEBSERVER_HOST_PORT:-80}:80"
+      - "${WEBSERVER_HTTPS_PORT:-443}:443"

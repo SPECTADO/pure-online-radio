@@ -46,9 +46,9 @@ queue, jingles, live mic input, and external stream relays. Everything runs as a
 3. **Encoding**: the encoder mixes whatever should currently be audible (queue track, jingle overlay, live mic
    overlay, or an external relay) into a single continuous PCM bus, which a persistent ffmpeg process encodes into
    two HLS variants (low/high bitrate AAC) written to a shared volume.
-4. **Delivery**: nginx is the _only_ public entry point. It serves the built control panel and player SPAs, reverse
+4. **Delivery**: Caddy is the _only_ public entry point. It serves the built control panel and player SPAs, reverse
    proxies the API, serves the HLS output directly from the shared volume, and proxies both the NATS websocket
-   (realtime status) and the encoder's live-mic ingestion websocket.
+   (realtime status) and the encoder's live-mic ingestion websocket. TLS is optional and built in — see Deployment.
 5. **Realtime control**: the control panel sends commands (skip, play jingle, switch live/manual mode, start/stop
    live mic, schedule an external relay) over authenticated HTTP to the API, which publishes them to NATS. The
    encoder consumes those commands and publishes status (now-playing, queue-advanced, errors, heartbeat) back over
@@ -66,7 +66,7 @@ flowchart TB
     end
 
     subgraph Edge["docker network: edge"]
-        Web["webserver (nginx)\nserves both SPAs\nonly published port"]
+        Web["webserver (Caddy)\nserves both SPAs\nonly published port"]
     end
 
     subgraph Data["docker network: data"]
@@ -98,7 +98,7 @@ flowchart TB
 ```
 
 Two Docker networks enforce the trust boundary: **`data`** (Postgres, Redis, MinIO, NATS) is never reachable from the
-public internet, and only `api`/`encoder` bridge into it. **`edge`** carries only what nginx needs to reach
+public internet, and only `api`/`encoder` bridge into it. **`edge`** carries only what Caddy needs to reach
 (`webserver`, plus `api`/`encoder`/`nats`, which all also join `edge` for exactly the proxied paths above). MinIO in
 particular is never reached by a browser or by the encoder directly — uploads/reads go through the API, and the
 encoder only ever receives a short-lived presigned URL.
@@ -111,7 +111,7 @@ encoder only ever receives a short-lived presigned URL.
 | `apps/encoder`          | Node + TypeScript 7, orchestrates `ffmpeg`    | Produces the live HLS stream; mixes queue/jingle/mic/relay audio; NATS command/status                                     |
 | `apps/control-panel`    | React 19 + React Router 7 + Vite 8 + Tailwind | Manager UI: library, queue, schedule, clock wheels, live mic, settings                                                    |
 | `apps/player`           | React 19 + Vite 8 + Tailwind                  | Public listener page: HLS playback + now-playing metadata                                                                 |
-| `apps/webserver`        | nginx                                         | Single public entry point: static SPAs, API/HLS/NATS-ws/live-mic-ws reverse proxy                                         |
+| `apps/webserver`        | Caddy                                         | Single public entry point: static SPAs, API/HLS/NATS-ws/live-mic-ws reverse proxy, optional automatic HTTPS               |
 | `packages/shared-types` | Zod 4 schemas                                 | Wire contract shared by api/control-panel/encoder: DTOs + NATS subjects/payloads                                          |
 | `packages/database`     | Prisma 7                                      | Schema, migrations, seed script, driver-adapter-based `PrismaClient` singleton                                            |
 | Postgres                | —                                             | Metadata, schedule, history, users                                                                                        |
@@ -371,7 +371,7 @@ apps/
   encoder/          ffmpeg orchestrator (see apps/encoder/src/{core,sources,process,controllers})
   control-panel/    Manager UI (Vite + React + Tailwind)
   player/           Public listener page (Vite + React + Tailwind)
-  webserver/        nginx config + Dockerfile (no application code)
+  webserver/        Caddyfile (bind-mounted, edit + `docker compose restart webserver`, no rebuild) + Dockerfile
 packages/
   shared-types/     DTOs + NATS subject/payload contracts (zod), used by api/control-panel/encoder
   database/         Prisma schema, migrations, seed script
@@ -475,9 +475,11 @@ conveniences. Before deploying anywhere real:
   passwords, the three NATS user passwords, `JWT_SECRET`, `ENCODER_CALLBACK_TOKEN`.
 - Set `PUBLIC_BASE_URL` to your real public origin (used both for cookie/CORS-adjacent behavior and to generate the
   correct `ws(s)://` NATS URL handed to the control panel).
-- TLS is **not** handled by this stack's nginx config — terminate TLS in front of it (a cloud load balancer, Caddy,
-  or a Certbot sidecar mounting certs into the `webserver` container) and have that forward plain HTTP to
-  `webserver`'s port 80.
+- TLS is optional and handled by `webserver` (Caddy) itself — no external load balancer/Certbot sidecar needed. Set
+  `SITE_ADDRESS` in `.env` to your real public domain name (DNS pointed at this host, ports 80/443 reachable from the
+  internet) and Caddy automatically provisions and renews a free Let's Encrypt certificate, redirecting HTTP to
+  HTTPS. Leave `SITE_ADDRESS` unset for local/LAN deployments — plain HTTP only, same as before. See
+  `apps/webserver/Caddyfile`'s top comments for the mechanics.
 - Run the migration + seed steps from [Getting started](#getting-started-local-development) once against the
   production database (the seed script is idempotent — safe to re-run).
 - MinIO can be swapped for any S3-compatible provider by changing `S3_ENDPOINT` (and credentials) only — the API
@@ -496,7 +498,10 @@ All environment variables are documented in `.env.example`. Notable ones:
 | `ENCODER_CALLBACK_TOKEN`                                                      | api, encoder                   | Shared secret guarding `GET /internal/playback/next`                                                                                                                                       |
 | `JWT_SECRET`                                                                  | api                            | Signs the httpOnly access/refresh cookies issued on login                                                                                                                                  |
 | `PUBLIC_BASE_URL`                                                             | api, webserver                 | Public origin; drives the generated `env-config.js` and the NATS-ws URL handed to the control panel                                                                                        |
-| `WEBSERVER_HOST_PORT`                                                         | webserver                      | Host port nginx binds to (default `80`) — change if that port is already taken locally                                                                                                     |
+| `WEBSERVER_HOST_PORT`                                                         | webserver                      | Host port Caddy binds to for HTTP (default `80`) — change if that port is already taken locally                                                                                             |
+| `WEBSERVER_HTTPS_PORT`                                                        | webserver                      | Host port Caddy binds to for HTTPS (default `443`) — only matters when `SITE_ADDRESS` is set                                                                                                |
+| `SITE_ADDRESS`                                                                | webserver                      | Unset = plain HTTP on any hostname (local/LAN). A real public domain = automatic Let's Encrypt HTTPS for that domain. See Deployment                                                        |
+| `ACME_EMAIL`                                                                  | webserver                      | Optional Let's Encrypt contact email (expiry/renewal-problem notices); only relevant alongside `SITE_ADDRESS`                                                                               |
 
 ## NATS subject contract
 
@@ -650,17 +655,37 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
     than installing a build toolchain into the final image.
 
   All of the above (multi-input single-`gpac`-process dashing, a from-source build against this project's exact
-  Debian bookworm-slim base, and plain static nginx correctly serving byte-range `Range` requests against a segment
-  file `gpac` is still actively appending to) was verified empirically in a standalone spike before writing any of
-  the real integration — including the two non-obvious gotchas it surfaced: GPAC's own doc example chains
+  Debian bookworm-slim base, and a plain static file server correctly serving byte-range `Range` requests against a
+  segment file `gpac` is still actively appending to) was verified empirically in a standalone spike before writing
+  any of the real integration — including the two non-obvious gotchas it surfaced: GPAC's own doc example chains
   `reframer:rt=on` onto an already real-time-paced source, which double-regulates timing and silently balloons
   latency (measured ~18s) — don't do that when ffmpeg is already pacing the feed; and a FIFO bind-mounted from the
   **host** into a container doesn't reliably cross the Docker Desktop macOS boundary (silent no-op, not an error) —
   only same-container FIFOs (what `LowLatencyEncoder` actually uses) are safe here. Not implemented: blocking
-  playlist reload (`_HLS_msn`/`_HLS_part`) — plain static nginx can't do that by design, so clients fall back to
-  polling, which is spec-legal but not maximally optimal; and no real browser/hls.js playback test (no browser
-  automation available in the environment this was built in) — the manifest correctness and byte-range serving were
-  verified directly instead (real `EXT-X-PART`/`BYTERANGE`/`EXT-X-PRELOAD-HINT` tags, `ffprobe`-decoded audio).
+  playlist reload (`_HLS_msn`/`_HLS_part`) — Caddy's `SERVER-CONTROL` never advertises `CAN-BLOCK-RELOAD`, so clients
+  correctly fall back to polling, which is spec-legal but not maximally optimal. A real browser/hls.js playback test
+  (headless Chrome via the Chrome DevTools Protocol) *was* later run against the live stack and did catch a genuine
+  bug: gpac can publish a playlist's `EXT-X-PRELOAD-HINT`/`EXT-X-PART` byte offset a moment before that offset is
+  actually flushed to the `.m4s` file, and hls.js's default retry policy treats a resulting `416` as permanent
+  (never retries any 4xx), silently stalling playback with no fatal error for the player's own reconnect logic to
+  catch. Fixed at the webserver layer — see `apps/webserver/Caddyfile`'s `.m4s` handling and the loopback-server
+  comment above it for why that specific fix needs an internal `reverse_proxy` hop rather than a direct
+  `handle_errors` block.
+
+  A second, more serious variant of the same underlying issue surfaced later against **Safari's native HLS player**
+  specifically (it doesn't use hls.js at all — its own AVFoundation-based engine, with entirely different and far
+  less transparent retry behavior): reported as "plays ~1s then stuck, fixed by stop/restart," and confirmed via
+  Caddy access logs during a live repro that Safari intersperses normal Range-based part fetches with **plain
+  (non-Range) GETs** against `.m4s` segment files — including, sometimes, the segment gpac is still actively
+  writing. Reproduced directly: a plain GET against the in-progress segment returned `200 OK` with a genuine
+  `Content-Length: 17022`, and the *same URL* moments later, once gpac finished it, was `170172` bytes — a ~10x
+  truncation with no error, no signal to retry, nothing distinguishing it from a real, short, complete segment.
+  `apps/encoder/src/process/llHlsEncoder.ts` now passes GPAC's dasher `seg_sync=yes` explicitly (its `auto` default
+  claims to already wait for HLS, but empirically did not close this window) as a source-side mitigation, but the
+  authoritative fix is at the webserver: `apps/webserver/Caddyfile` now rejects any `.m4s` request **without** a
+  `Range` header with a retryable `503`, unconditionally — including against already-complete segments, which costs
+  nothing since every LL-HLS-aware client (hls.js included, verified directly) already always uses Range requests
+  for `.m4s` on its own.
 
 **Stubbed (real routes/modules exist, but return placeholder data or `501 Not Implemented`):**
 
@@ -690,34 +715,63 @@ text that then breaks the moment a generated password happens to start with a di
 it as a number). If you see this error, something is bypassing that entrypoint (e.g. the image wasn't rebuilt after
 a change to `infra/docker/nats/`) — run `docker compose build nats && docker compose up -d nats`.
 
-**`webserver` exits with `host not found in upstream`.** nginx resolves a `proxy_pass` hostname once at config-load
-time by default and hard-crashes if that container isn't registered on the network yet — a real startup race, since
-`encoder` (connects NATS, spawns ffmpeg, opens the FIFO) can take longer to come up than `webserver` does. The nginx
-config uses Docker's embedded DNS resolver (`127.0.0.11`) plus a `set $x_upstream ...;` variable per proxied backend
-so hostnames are re-resolved lazily per-request instead of once at boot — `docker-compose.yml` also lists `nats`/
-`encoder` in `webserver`'s `depends_on` as a first line of defense. If you add another proxied backend, follow the
-same pattern (`set` the variable, _then_ any `rewrite ... break`, _then_ a `proxy_pass` with no trailing URI) — see
-the next entry for why the ordering matters.
+**`webserver` (Caddy) serves an empty `200 OK` for a request that should hit a real route** — hit this for real when
+proxying to it from the Vite dev servers, but it can bite any request whose `Host` header doesn't match what Caddy
+expects. A Caddy site address (even a plain hostname like `localhost`) is also a **host-matching pattern**, not just
+a listen address the way nginx's default `server_name _` is — a request whose `Host` header doesn't match gets routed
+to nothing and Caddy answers with an empty, harmless-looking `200`. This stack has more than one legitimate `Host`
+value hitting the same container (`localhost`/a real domain from a browser, `webserver` — the Docker service name —
+from the `player-dev`/`control-panel-dev` Vite proxies), so `apps/webserver/Caddyfile`'s site address is deliberately
+`{$SITE_ADDRESS:http://:80}` — a bare `:80` with no hostname is Caddy's actual equivalent of `server_name _`, matching
+any `Host` on that port. If you ever change `SITE_ADDRESS` to a bare hostname instead of leaving it unset, every
+non-matching `Host` (including the Vite dev proxies) silently breaks again the same way.
 
-**`/api/*` returns nginx's own error page instead of the API's response** (e.g. a raw 500 "invalid URL prefix", or
-every request landing on the same route regardless of path). This is the classic nginx pitfall that comes with using
-a variable in `proxy_pass` (done here for the lazy-DNS reason above): a variable disables nginx's normal "replace the
-matched location prefix" URI rewriting, so `proxy_pass http://$var/;` would forward the literal path `/` for _every_
-request, dropping the actual path entirely. The fix already in place is `rewrite ^/api/(.*)$ /$1 break;` followed by
-a `proxy_pass` with no URI part (so it just forwards the already-rewritten current request URI) — but the `set` for
-the variable must come **before** the `rewrite ... break`, not after, since `break` halts all further rewrite-phase
-directives in that location block, `set` included. Getting this order backwards produces "using uninitialized
-variable" warnings in `docker compose logs webserver` and a 500 on every request.
+**Caddy enables HTTPS (redirecting HTTP→HTTPS) even though `SITE_ADDRESS` was never explicitly set to a domain.**
+Verified directly: Caddy's automatic-HTTPS logic does **not** simply serve plain HTTP for `localhost`, a bare `:80`,
+or a loopback IP the way you might expect — it still provisions a certificate from its own internal (browser-
+untrusted) CA and redirects HTTP to HTTPS, the same treatment it gives any hostname it can't get a public ACME cert
+for. Only an explicit `http://` scheme prefix on the site address unconditionally disables this. Both the main site
+block and the internal loopback server block in the Caddyfile carry this prefix for exactly this reason — don't
+drop it when editing either.
 
-**Control panel / player loads `index.html` but its JS/CSS 404 (`/manage/assets/index-*.js`).** This bit us once for
-real, not just in theory: a single generic `location ~* \.(js|css|...)$ { add_header ...; }` meant to add long-cache
-headers to hashed assets will **win over** the SPA's own `location /` or `location /manage/` prefix block — nginx
-always prefers a regex location over a prefix location regardless of file order — and since that regex location
-defines no `root`/`alias` of its own, it falls back to nginx's compiled-in default document root instead of either
-SPA's real one, 404ing every asset. The fix is two _path-scoped_ regex locations (`^/assets/...` for the player,
-`^/manage/assets/...` for the control panel), each with its own explicit `alias` using the regex capture group. If
-you add a third static app, give its hashed-asset location the same treatment rather than reaching for one generic
-catch-all regex.
+**A `.m4s` byte-range fetch returns `200` with the full file instead of `206` Partial Content**, breaking every
+LL-HLS part request. Caused by a blanket top-level `encode gzip` — gzip compression and byte-range requests are
+fundamentally incompatible (a `Range` is meaningless against compressed output), and Caddy's compression middleware
+resolves that conflict by silently ignoring the `Range` header rather than erroring. nginx's original `gzip_types`
+allowlist never hit this because it only ever named text-ish mime types, never the HLS ones. The fix already in place
+scopes `encode gzip` per-`handle` block (JSON/JS/CSS/HTML only, see the Caddyfile) rather than applying it site-wide
+— if you add a new compressible route, scope `encode` to that block specifically rather than promoting it back to
+the top level.
+
+**A `.m4s` Range request past the currently-written byte offset returns a bare `416`, not the `503` the Caddyfile
+comment says it should.** `file_server`'s own invalid-Range response is written directly through Go's stdlib
+`http.Error()`, which bypasses Caddy's `handle_errors` pipeline entirely (unlike a Go handler error) — a site-wide
+`handle_errors` block can never see or remap it, confirmed directly against this exact Caddy version. The fix
+(already in place) fronts `.m4s` requests with `reverse_proxy` to an internal loopback Caddy server
+(`http://127.0.0.1:9991`, also defined in the Caddyfile) purely so `reverse_proxy`'s own `handle_response` — which
+*can* match and remap an upstream status code — has something to intercept. If you touch this block, keep the
+`header_up Host 127.0.0.1:9991` line: `reverse_proxy` forwards the original inbound `Host` header by default, and
+without overriding it the loopback server (whose site address literally is `127.0.0.1:9991`) never matches, silently
+falling through to an empty `200` instead of the file — the exact same class of bug as the first entry above, just
+container-internal instead of Docker-network-wide.
+
+**Playback works fine in Chrome but Safari plays ~1 second and stalls**, recoverable only by stopping and restarting
+(and the restart takes noticeably longer than usual). Not the same bug as the two entries above — this one has
+nothing to do with error status codes. Confirmed via Caddy access logs during a live repro: Safari's native HLS
+player (it doesn't use hls.js — its own AVFoundation engine) sometimes issues a **plain, non-Range GET** against a
+`.m4s` file, including the segment gpac is still actively writing. A static file server has no way to know a file
+it's serving will keep growing, so it answers `200 OK` with whatever bytes exist at that instant — reproduced
+directly, a `Content-Length: 17022` full-file response for a segment whose true, final size (confirmed by
+re-fetching the same URL moments later once gpac finished it) was `170172`. No error, no truncation signal — it
+looks exactly like a short, complete segment, and that's exactly what plays for ~1s before running out of data.
+`docker compose logs webserver` won't show anything wrong either — the response genuinely was `200`, not an error.
+Two-part fix: `apps/encoder/src/process/llHlsEncoder.ts` passes GPAC's dasher `seg_sync=yes` explicitly (its `auto`
+default claims to already cover this for HLS output but empirically didn't close the window), and
+`apps/webserver/Caddyfile` rejects any `.m4s` request lacking a `Range` header with a retryable `503` — the
+authoritative fix, since it's the one that actually prevents the truncated-200 response from ever being served,
+regardless of what gpac's internal timing does. If you ever need a client to fetch a whole `.m4s` file at once,
+it must send `Range: bytes=0-` (or similar) rather than omit the header — every LL-HLS-aware client already does
+this on its own (verified directly for hls.js), so this costs real clients nothing.
 
 **Vite dev container (`control-panel-dev`/`player-dev`) starts but is unreachable on its published port.** Check
 `docker compose logs control-panel-dev` for `Network: use --host to expose` — that means Vite is still only bound to
@@ -731,9 +785,9 @@ Vite as a literal, unrecognized argument. Fixed by baking `--host` directly into
 (`ECONNREFUSED`/502 through the `:5173`/`:5174` proxy).** Two separate bugs, both hit for real:
 
 1. `apps/control-panel/vite.config.ts` and `apps/player/vite.config.ts`'s dev proxy forwarded `/api/*` verbatim, but
-   the api app mounts routes at the bare path (`/auth`, `/queue`, `/public`, ...) — nginx strips the `/api` prefix in
-   production (see the `webserver` entry above), so the dev proxy needs the same `rewrite: (path) =>
-   path.replace(/^\/api/, "")` or every request 404s against the api.
+   the api app mounts routes at the bare path (`/auth`, `/queue`, `/public`, ...) — the webserver strips the `/api`
+   prefix in production (`uri strip_prefix /api` in `apps/webserver/Caddyfile`), so the dev proxy needs the same
+   `rewrite: (path) => path.replace(/^\/api/, "")` or every request 404s against the api.
 2. `VITE_DEV_API_PROXY_TARGET` defaults to `http://localhost:3000`, which is correct for host-side `pnpm --filter
    @spectado/control-panel dev` (Docker publishes that port to the host) but wrong _inside_ the `control-panel-dev`/
    `player-dev` containers themselves — there, `localhost` is the container, not `api`. Fixed by setting
@@ -741,29 +795,41 @@ Vite as a literal, unrecognized argument. Fixed by baking `--host` directly into
    embedded DNS over the `edge` network they share with `api` (rather than `host.docker.internal`, which needs extra
    config on native Linux Docker).
 
+**The public player never plays anything through `player-dev` (`:5174`)**, showing a persistent "Stream error
+(networkError): manifestParsingError — reconnecting…" banner even though the stack is otherwise healthy.
+`apps/player/vite.config.ts` only ever proxied `/api/*` — `/master.m3u8` (and every other HLS path) fell straight
+through Vite's SPA history-fallback middleware instead, which returns `index.html` (200, `text/html`) for any
+unmatched path. hls.js dutifully tries to parse that HTML as a playlist, fails immediately, and loops the reconnect
+banner forever since the manifest itself never becomes valid no matter how many times it's retried. Fixed by adding
+an HLS-path proxy rule to `vite.config.ts` (`^/(master\.m3u8$|high/|low/)`) targeting `VITE_DEV_HLS_PROXY_TARGET`,
+set to `http://webserver:80` for the containerized `player-dev` service in `docker-compose.override.yml` — same
+Docker-DNS reasoning as `VITE_DEV_API_PROXY_TARGET` above, since `localhost` inside that container isn't the
+`webserver` container.
+
 **Login "succeeds" (200 + user JSON) but every subsequent request 401s** (`missing access token`, or the control
 panel shows "Connection error" / can't skip/start/reach `/auth/me`). The whole stack runs over plain HTTP in dev
 (`http://localhost:8000`, or `:5173`/`:5174` for the Vite HMR servers), but the auth cookies were being set with
 `secure: true` unconditionally. A `Secure` cookie isn't just "not sent" over HTTP — some browsers (confirmed in
 Safari) refuse to **store** it at all, so the login response looks fine but the browser never actually keeps the
 session. Fixed by making it `secure: config.isProduction` in `apps/api/src/modules/auth/auth.routes.ts` (only
-HTTPS-only in production, where TLS is terminated in front of nginx per the Deployment section). Check with
+HTTPS-only in production, where TLS — when enabled — is terminated by Caddy itself per the Deployment section). Check with
 `curl -sD - -o /dev/null -X POST .../api/auth/login ... | grep -i set-cookie` — in dev it should show `HttpOnly;
 SameSite=Strict` with **no** `Secure`.
 
 **`/manage` (no trailing slash) silently shows the player app instead of the control panel**, or a
 **`WebSocket connection to 'ws://.../realtime' failed: bad response from the server`**. Same underlying cause both
-times: nginx's `location /manage/` and `location /realtime/` are prefix matches that require the trailing slash to
-already be part of the request URI — a bare `/manage` or `/realtime` doesn't match either and falls through to the
-player SPA's `location /` instead, which returns a normal 200 HTML response (not a 101 WebSocket upgrade). The two
-cases needed _different_ fixes: `/manage` got an explicit `location = /manage { return 301 $scheme://$http_host/manage/; }`
-redirect (note `$http_host`, not `$host` — `$host` drops the port, and nginx would otherwise build the redirect
-against its own internal listening port rather than the externally-mapped `WEBSERVER_HOST_PORT`). `/realtime`
-could **not** use a redirect — WebSocket clients don't follow HTTP redirects during the handshake — so that one had
-to be fixed at the source instead: `apps/api/src/modules/realtime/realtime.routes.ts` now hands out
-`ws://.../realtime/` (trailing slash included) rather than relying on nginx to correct it after the fact. If you add
-another trailing-slash-sensitive location, decide up front whether anything connecting to it is a WebSocket — if so,
-skip the redirect trick entirely and fix the URL at its source instead.
+times: Caddy's `handle /manage/*` and `handle /realtime/*` are prefix matches that require the trailing slash to
+already be part of the request path — a bare `/manage` or `/realtime` doesn't match either and falls through to the
+player SPA's catch-all `handle` instead, which returns a normal 200 HTML response (not a 101 WebSocket upgrade). The
+two cases needed _different_ fixes: `/manage` got an explicit `redir /manage {http.request.scheme}://{http.request.hostport}/manage/ 301`
+(note `{http.request.hostport}`, not `{http.request.host}` — the latter drops the port, and Caddy would otherwise
+build the redirect against its own internal listening port rather than the externally-mapped `WEBSERVER_HOST_PORT` —
+verified directly, this bit the port-mapped local setup for real). `/realtime` could **not** use a redirect —
+WebSocket clients don't follow HTTP redirects during the handshake — so that one had to be fixed at the source
+instead: `apps/api/src/modules/realtime/realtime.routes.ts` now hands out `ws://.../realtime/` (trailing slash
+included) rather than relying on the webserver to correct it after the fact. If you add another trailing-slash-
+sensitive route, decide up front whether anything connecting to it is a WebSocket — if so, skip the redirect trick
+entirely and fix the URL at its source instead.
 
 **Edited `apps/api` or `apps/encoder` source but the running dev container doesn't reflect it.** `tsx watch` relies
 on filesystem-change events, and Docker Desktop's bind-mount file sharing doesn't always propagate host-side edits
