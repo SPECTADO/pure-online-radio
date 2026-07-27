@@ -18,7 +18,7 @@ async function fireExternalStream(stream: ExternalStream, now: Date): Promise<vo
         ? new Date(now.getTime() + stream.durationMs)
         : null;
 
-  await publishRelayStartCommand({ relayId: stream.id, url: stream.url, startAt: now, endAt, userId: null });
+  await publishRelayStartCommand({ relayId: stream.id, name: stream.name, url: stream.url, startAt: now, endAt, userId: null });
 
   await prisma.externalStream.update({
     where: { id: stream.id },

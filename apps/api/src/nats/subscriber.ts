@@ -57,7 +57,7 @@ export function startEncoderStatusSubscriber(): void {
       }
       await prisma.externalStream.updateMany({
         where: { id: parsed.data.relayId, status: "PLAYING" },
-        data: { status: "STOPPED" },
+        data: { status: parsed.data.reason === "failed" ? "FAILED" : "STOPPED" },
       });
       return;
     }

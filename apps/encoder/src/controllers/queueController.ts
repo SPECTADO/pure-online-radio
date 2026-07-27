@@ -53,6 +53,32 @@ export class QueueController {
     await this.advance(command.reason);
   }
 
+  /** Current playback mode -- read by RelayController to fill NowPlayingStatus.mode when mounting a relay. */
+  get currentMode(): PlaybackMode {
+    return this.mode;
+  }
+
+  /**
+   * Called by RelayController right before it takes over the mixer's primary
+   * slot for a relay: stops this controller's own advance-timer/current-
+   * source bookkeeping from fighting over ownership of the bus while the
+   * relay is live. Does not touch the mixer itself -- RelayController does
+   * that immediately after.
+   */
+  suspendForRelay(): void {
+    this.clearAdvanceTimer();
+    this.teardownCurrentSource();
+  }
+
+  /**
+   * Called by RelayController once the relay has ended/stopped/failed --
+   * resumes normal queue-driven playback from wherever it left off, same as
+   * any other "auto" advance.
+   */
+  resumeAfterRelay(): void {
+    void this.advance("auto");
+  }
+
   async handleSetMode(command: SetModeCommand): Promise<void> {
     const previousMode = this.mode;
     this.mode = command.mode;

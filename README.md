@@ -7,10 +7,10 @@ queue, jingles, live mic input, and external stream relays. Everything runs as a
 > **Status:** this repository is currently a **scaffold**. The full infrastructure, data model, and service wiring
 > are real and verified working end-to-end (see [Implementation status](#implementation-status)). The manual
 > playback queue, standalone jingle overlay, the Schedule/External Streams feature (recurring/one-off
-> song-jingle-ad blocks and relay triggers, real scheduler + NATS commands), and Clock Wheels (automatic queue
-> filling from day/time rotation rules, with separation-rule enforcement) are now real too — most of what's left
-> stubbed is live mic mixing and the encoder's actual external-relay audio decode. See that section before assuming
-> a feature works.
+> song-jingle-ad blocks and relay triggers, real scheduler + NATS commands, and a real encoder-side relay decode with
+> reconnect/backoff and fallback-to-queue), and Clock Wheels (automatic queue filling from day/time rotation rules,
+> with separation-rule enforcement) are now real too — what's left stubbed is live mic mixing. See that section
+> before assuming a feature works.
 
 ## Contents
 
@@ -568,12 +568,19 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   now prefers over the manual queue), and — for `AT_TIME` — publishes a real `advance` command to interrupt
   playback immediately. Full CRUD + an ordered drag-to-reorder item picker on the Schedule page.
 - **External Streams** (`ExternalStream`) — the same trigger/insertion model as Schedule, plus an independent end
-  behavior: stop naturally (on-demand EOF or a live disconnect, reported by the encoder's `relay.ended` status) or
-  force-stop at an absolute time or after a duration. The same scheduler tick publishes real, audited
-  `relay.start`/`relay.stop` NATS commands at the right moment (verified end-to-end: `relayStart`'s `endAt` is
-  computed correctly for `AFTER_DURATION`, and the forced `relayStop` fires exactly on schedule). The encoder
-  receiving and acknowledging these commands is real; it decoding the relay URL into actual audio is not (see
-  Stubbed, below) — that's a separate, pre-existing gap in the audio pipeline, not in the scheduling logic.
+  behavior: stop naturally (on-demand EOF, reported by the encoder's `relay.ended` status) or force-stop at an
+  absolute time or after a duration. The same scheduler tick publishes real, audited `relay.start`/`relay.stop` NATS
+  commands at the right moment (verified end-to-end: `relayStart`'s `endAt` is computed correctly for
+  `AFTER_DURATION`, and the forced `relayStop` fires exactly on schedule). The encoder now really decodes the relay
+  URL: `RelayController` (`apps/encoder/src/controllers/relayController.ts`) mounts `RelaySource`
+  (`sources/relaySource.ts`) as the mixer's primary source, suspending `QueueController`'s own advance bookkeeping
+  for the duration and resuming it once the relay ends/stops/fails. `RelaySource` wraps its ffmpeg decode in a
+  `ProcessSupervisor` (the same crash/backoff wrapper `masterEncoder.ts` uses) so a live upstream that drops
+  mid-play reconnects automatically, distinguishes a clean on-demand EOF (exit code 0, stops the supervisor, fires
+  `relay.ended`) from a crash/drop (any other exit code, left to the supervisor's own backoff), and — per
+  `RelayStartCommand.onFailure` (always `fallbackToQueue` today) — falls back to the queue and reports a real
+  `ExternalStreamStatus.FAILED` if the relay never produces any audio within a 10s connect timeout, rather than
+  leaving dead air indefinitely.
 - **Clock Wheels** (`ClockWheel`/`ClockWheelSlot`/`ClockWheelStep`) — the lowest-priority queue-fill tier: one
   required **Default** wheel (seeded, never deletable, no day/time window of its own) plus any number of
   manager-defined wheels, each with one or more weekday+time-range slots (midnight-wraparound slots handled, e.g. a
@@ -643,10 +650,10 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
 
 **Stubbed (real routes/modules exist, but return placeholder data or `501 Not Implemented`):**
 
-- Live mic mixing, external relay audio decode in the encoder (`apps/encoder/src/sources/relaySource.ts`,
-  `controllers/relayController.ts`) — correct interfaces/state machines exist, and `relayController` now receives
-  correctly-shaped `relay.start`/`relay.stop`/`relay.cancel` commands (see External Streams, above), but doesn't yet
-  act on them to produce real audio (jingle playback is the one overlay that's real now).
+- Live mic mixing in the encoder (`apps/encoder/src/sources/micSource.ts`, `controllers/liveMicController.ts`) —
+  correct interfaces/state machine exist (mirroring the now-real `relaySource.ts`/`relayController.ts`), and
+  `LiveMicServer` accepts WebSocket connections, but doesn't yet decode/mix the mic input into the bus (jingle
+  playback and external relay are the two overlay/primary sources that are real now).
 
 ## Troubleshooting
 

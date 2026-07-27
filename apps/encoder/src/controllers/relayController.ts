@@ -1,34 +1,87 @@
 import type { RelayCancelCommand, RelayStartCommand, RelayStopCommand } from "@spectado/shared-types";
+import type { Mixer } from "../core/mixer.js";
+import type { StatusPublisher } from "../nats/statusPublisher.js";
 import type { Logger } from "../util/logger.js";
+import type { QueueController } from "./queueController.js";
+import { RelaySource } from "../sources/relaySource.js";
+
+interface ActiveRelay {
+  relayId: string;
+  source: RelaySource;
+}
 
 /**
- * STUB - not implemented in this pass. commandRouter.ts currently just logs
- * and acks every command itself; nothing calls into this controller yet.
- *
- * TODO (full design): on RelayStartCommand, construct a
- * sources/relaySource.ts, switch the mixer's primary source to it (the api
- * already decides *when* to send this command -- immediately for an AT_TIME
- * schedule, or once the current queue item is about to finish for ASAP --
- * see apps/api/src/scheduler/externalStreamScheduler.ts), and hand back to
- * the queue at `endAt` if one was sent (null = no forced end, run until the
- * source itself stops -- e.g. on-demand EOF or a live disconnect -- and
- * publish relay.ended so the api can mark it stopped). Apply
- * RelayStartCommand.onFailure ("retry" | "fallbackToQueue") if the relay
- * can't connect. On RelayStopCommand, end the relay early. On
- * RelayCancelCommand, cancel a not-yet-started scheduled relay outright.
+ * REAL: mounts/unmounts the relay primary-slot source driven off scheduler-
+ * published NATS commands (apps/api/src/scheduler/externalStreamScheduler.ts
+ * decides *when* to send relay.start/relay.stop -- this controller just acts
+ * on them). Suspends QueueController's own advance bookkeeping while a relay
+ * is on the bus and hands playback back to it once the relay ends, is
+ * stopped, or fails to connect.
  */
 export class RelayController {
-  constructor(private readonly logger: Logger) {}
+  private current: ActiveRelay | null = null;
+
+  constructor(
+    private readonly mixer: Mixer,
+    private readonly queueController: QueueController,
+    private readonly statusPublisher: StatusPublisher,
+    private readonly logger: Logger,
+  ) {}
 
   async handleRelayStart(command: RelayStartCommand): Promise<void> {
-    this.logger.warn({ command }, "RelayController.handleRelayStart not implemented - TODO: schedule relay source as primary between startAt/endAt");
+    this.teardownCurrent();
+    this.queueController.suspendForRelay();
+
+    const source = new RelaySource({ relayId: command.relayId, url: command.url, onFailure: command.onFailure }, this.logger);
+    source.once("ended", () => this.finishRelay(command.relayId, "stopped"));
+    source.once("failed", () => this.finishRelay(command.relayId, "failed"));
+
+    this.current = { relayId: command.relayId, source };
+    this.mixer.setPrimarySource(source, "relay");
+    this.logger.info({ relayId: command.relayId, url: command.url }, "relay mounted as primary source");
+
+    const ts = new Date().toISOString();
+    this.statusPublisher.publishNowPlaying({
+      ts,
+      trackId: null,
+      isLive: true,
+      type: "external_relay",
+      title: command.name,
+      artist: null,
+      album: null,
+      coverArtUrl: null,
+      startedAt: ts,
+      durationMs: null,
+      mode: this.queueController.currentMode,
+    });
+    this.statusPublisher.publishRelayStarted({ ts, relayId: command.relayId });
   }
 
   async handleRelayStop(command: RelayStopCommand): Promise<void> {
-    this.logger.warn({ command }, "RelayController.handleRelayStop not implemented - TODO: end relay early and hand back to queue");
+    this.finishRelay(command.relayId, "stopped");
   }
 
   async handleRelayCancel(command: RelayCancelCommand): Promise<void> {
-    this.logger.warn({ command }, "RelayController.handleRelayCancel not implemented - TODO: cancel a not-yet-started scheduled relay");
+    // Nothing currently publishes relay.cancel (the DELETE route only ever
+    // sends relay.stop -- see externalStreams.routes.ts), so this is a
+    // defensive mirror of handleRelayStop, not an exercised path today.
+    this.finishRelay(command.relayId, "stopped");
+  }
+
+  /** Guards against a stale/duplicate "ended"/"failed" firing after the relay was already torn down by a stop/cancel. */
+  private finishRelay(relayId: string, reason: "stopped" | "failed"): void {
+    if (this.current?.relayId !== relayId) return;
+    this.teardownCurrent();
+    this.logger.info({ relayId, reason }, "relay ended; resuming queue");
+    this.queueController.resumeAfterRelay();
+    this.statusPublisher.publishRelayEnded({ ts: new Date().toISOString(), relayId, reason });
+  }
+
+  private teardownCurrent(): void {
+    if (this.current) {
+      this.current.source.removeAllListeners();
+      this.current.source.destroy();
+      this.current = null;
+    }
   }
 }

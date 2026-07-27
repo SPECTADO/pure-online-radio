@@ -51,6 +51,7 @@ export type LiveStopCommand = z.infer<typeof LiveStopCommandSchema>;
 export const RelayStartCommandSchema = z.object({
   commandId: z.string(),
   relayId: z.string(),
+  name: z.string(),
   url: z.string().url(),
   startAt: z.string().datetime(),
   // null = no forced end -- run until the source itself stops (ExternalStreamEndBehavior.NATURAL).
@@ -128,6 +129,9 @@ export type RelayStartedStatus = z.infer<typeof RelayStartedStatusSchema>;
 export const RelayEndedStatusSchema = z.object({
   ts: z.string().datetime(),
   relayId: z.string(),
+  // "failed" = never connected before RelayStartCommand.onFailure's connect timeout elapsed;
+  // "stopped" covers both a clean/natural end and an explicit relay.stop/cancel.
+  reason: z.enum(["stopped", "failed"]).default("stopped"),
 });
 export type RelayEndedStatus = z.infer<typeof RelayEndedStatusSchema>;
 

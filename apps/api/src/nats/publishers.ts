@@ -101,6 +101,7 @@ export async function publishJingleStopCommand(params: {
 
 export async function publishRelayStartCommand(params: {
   relayId: string;
+  name: string;
   url: string;
   startAt: Date;
   endAt: Date | null;
@@ -109,6 +110,7 @@ export async function publishRelayStartCommand(params: {
   const command: RelayStartCommand = {
     commandId: randomUUID(),
     relayId: params.relayId,
+    name: params.name,
     url: params.url,
     startAt: params.startAt.toISOString(),
     endAt: params.endAt ? params.endAt.toISOString() : null,

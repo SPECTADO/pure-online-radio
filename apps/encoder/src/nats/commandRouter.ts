@@ -17,6 +17,7 @@ import type { z } from "zod";
 import type { NatsClient } from "./natsClient.js";
 import type { QueueController } from "../controllers/queueController.js";
 import type { JingleController } from "../controllers/jingleController.js";
+import type { RelayController } from "../controllers/relayController.js";
 import type { Logger } from "../util/logger.js";
 
 interface CommandEntry {
@@ -44,15 +45,16 @@ const COMMAND_SCHEMAS: Record<string, CommandEntry> = {
 export interface CommandControllers {
   queueController: QueueController;
   jingleController: JingleController;
+  relayController: RelayController;
 }
 
 /**
  * REAL: subscribes to every `radio.encoder.cmd.*` subject (via
  * NATS_WILDCARDS.cmd), validates each payload against its matching schema,
- * and dispatches `advance`/`setMode`/`jingle.play`/`jingle.stop` to the real
- * queueController/jingleController. `live.*`/`relay.*` keep the original
- * pass's behavior (validate + ack `true`, no dispatch) -- those features are
- * untouched, out of scope here.
+ * and dispatches `advance`/`setMode`/`jingle.play`/`jingle.stop`/`relay.*` to
+ * the real queueController/jingleController/relayController. `live.*` keeps
+ * the original pass's behavior (validate + ack `true`, no dispatch) -- mic
+ * mixing is still untouched, out of scope here.
  */
 export function startCommandRouter(natsClient: NatsClient, logger: Logger, controllers: CommandControllers): void {
   natsClient.subscribe(NATS_WILDCARDS.cmd, (subject, data) => {
@@ -99,8 +101,17 @@ async function dispatch(subject: string, data: unknown, controllers: CommandCont
     case NATS_SUBJECTS.cmd.jingleStop:
       await controllers.jingleController.handleJingleStop(data as z.infer<typeof JingleStopCommandSchema>);
       return;
+    case NATS_SUBJECTS.cmd.relayStart:
+      await controllers.relayController.handleRelayStart(data as z.infer<typeof RelayStartCommandSchema>);
+      return;
+    case NATS_SUBJECTS.cmd.relayStop:
+      await controllers.relayController.handleRelayStop(data as z.infer<typeof RelayStopCommandSchema>);
+      return;
+    case NATS_SUBJECTS.cmd.relayCancel:
+      await controllers.relayController.handleRelayCancel(data as z.infer<typeof RelayCancelCommandSchema>);
+      return;
     default:
-      // live.*/relay.*: untouched stubs, no dispatch -- already ack'd above.
+      // live.*: untouched stub, no dispatch -- already ack'd above.
       return;
   }
 }
