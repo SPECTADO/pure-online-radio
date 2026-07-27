@@ -1,6 +1,9 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type {
   JingleDTO,
   JingleEndedStatus,
@@ -19,6 +22,7 @@ import { useNatsSubject } from "../lib/natsClient";
 import { useCountdown } from "../lib/useCountdown";
 import { useNow } from "../lib/useNow";
 import { buildUpNextList, type UpNextDisplayEntry } from "../lib/queueTiming";
+import { useQueueReorder } from "../lib/useQueueReorder";
 import { formatDuration, formatTimeOfDay } from "../lib/format";
 import { useTimeFormat } from "../lib/useTimeFormat";
 import { ProgressBar } from "../components/ProgressBar";
@@ -170,7 +174,7 @@ export function DashboardPage() {
             onSkip={() => skipMutation.mutate()}
             skipDisabled={skipMutation.isPending}
           />
-          <UpNextSection upNext={upNext} moreCount={upNextMoreCount} />
+          <UpNextSection upNext={upNext} moreCount={upNextMoreCount} queueEntries={queueQuery.data ?? []} />
         </div>
 
         <div className="flex flex-col gap-6">
@@ -266,8 +270,97 @@ function NowPlayingSection({
   );
 }
 
-function UpNextSection({ upNext, moreCount }: { upNext: UpNextDisplayEntry[]; moreCount: number }) {
+/** True for rows the Queue page's reorder endpoint accepts -- manual (unscheduled) items and
+ * clock-wheel rotation fills. Due schedule-fired items and not-yet-fired trigger previews are
+ * positioned wherever their expected time falls and aren't draggable. */
+function isDraggableUpNextRow(row: UpNextDisplayEntry): row is Extract<UpNextDisplayEntry, { kind: "queued" }> {
+  return row.kind === "queued" && (row.entry.scheduledFor === null || row.entry.clockWheelName !== null);
+}
+
+function upNextRowContent(row: UpNextDisplayEntry, timeFormat: ReturnType<typeof useTimeFormat>) {
+  return (
+    <>
+      <span className="shrink-0 whitespace-nowrap tabular-nums text-slate-400">
+        {formatTimeOfDay(row.expectedAt, timeFormat)}
+      </span>
+      {row.kind === "queued" ? (
+        <>
+          <span className="shrink-0 truncate text-slate-800">{row.entry.title}</span>
+          {row.entry.artist && <span className="truncate text-slate-400">— {row.entry.artist}</span>}
+          {row.entry.scheduleRuleName && <ScheduledTag label="Scheduled" />}
+          {row.entry.clockWheelName && <ScheduledTag label="Rotation" />}
+          <span className="ml-auto shrink-0">
+            <MediaKindBadge kind={row.entry.mediaKind} />
+          </span>
+        </>
+      ) : (
+        <>
+          <span className="truncate text-slate-500 italic">{row.trigger.name}</span>
+          <span className="ml-auto shrink-0">
+            <ScheduledTag label={row.kind === "SCHEDULE_RULE" ? "Scheduled" : "External stream"} />
+          </span>
+        </>
+      )}
+    </>
+  );
+}
+
+function DraggableUpNextRow({
+  row,
+  timeFormat,
+}: {
+  row: Extract<UpNextDisplayEntry, { kind: "queued" }>;
+  timeFormat: ReturnType<typeof useTimeFormat>;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: row.entry.id,
+  });
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      {...attributes}
+      {...listeners}
+      className={`flex cursor-grab touch-none select-none items-center gap-2 text-sm active:cursor-grabbing ${
+        isDragging ? "relative z-10 rounded bg-slate-50 opacity-50" : ""
+      }`}
+    >
+      <span aria-hidden="true" className="shrink-0 text-slate-300">
+        ⠿
+      </span>
+      {upNextRowContent(row, timeFormat)}
+    </li>
+  );
+}
+
+function StaticUpNextRow({ row, timeFormat }: { row: UpNextDisplayEntry; timeFormat: ReturnType<typeof useTimeFormat> }) {
+  return (
+    <li className="flex items-center gap-2 pl-5.5 text-sm">
+      {upNextRowContent(row, timeFormat)}
+    </li>
+  );
+}
+
+function UpNextSection({
+  upNext,
+  moreCount,
+  queueEntries,
+}: {
+  upNext: UpNextDisplayEntry[];
+  moreCount: number;
+  queueEntries: QueueEntryDTO[];
+}) {
   const timeFormat = useTimeFormat();
+  const { sensors, activeId, handleDragStart, handleDragEnd, handleDragCancel } = useQueueReorder(queueEntries);
+
+  const draggableIds = useMemo(() => upNext.filter(isDraggableUpNextRow).map((row) => row.entry.id), [upNext]);
+  const activeRow = useMemo(
+    () => upNext.find((row) => isDraggableUpNextRow(row) && row.entry.id === activeId) as
+      | Extract<UpNextDisplayEntry, { kind: "queued" }>
+      | undefined,
+    [upNext, activeId],
+  );
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-6">
@@ -276,35 +369,37 @@ function UpNextSection({ upNext, moreCount }: { upNext: UpNextDisplayEntry[]; mo
         <p className="text-sm text-slate-500">The queue is empty.</p>
       ) : (
         <>
-          <ul className="flex flex-col gap-2">
-            {upNext.map((row) => (
-              <li key={row.key} className="flex items-center gap-2 text-sm">
-                <span className="shrink-0 whitespace-nowrap tabular-nums text-slate-400">
-                  {formatTimeOfDay(row.expectedAt, timeFormat)}
-                </span>
-                {row.kind === "queued" ? (
-                  <>
-                    <span className="shrink-0 truncate text-slate-800">{row.entry.title}</span>
-                    {row.entry.artist && (
-                      <span className="truncate text-slate-400">— {row.entry.artist}</span>
-                    )}
-                    {row.entry.scheduleRuleName && <ScheduledTag label="Scheduled" />}
-                    {row.entry.clockWheelName && <ScheduledTag label="Rotation" />}
-                    <span className="ml-auto shrink-0">
-                      <MediaKindBadge kind={row.entry.mediaKind} />
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span className="truncate text-slate-500 italic">{row.trigger.name}</span>
-                    <span className="ml-auto shrink-0">
-                      <ScheduledTag label={row.kind === "SCHEDULE_RULE" ? "Scheduled" : "External stream"} />
-                    </span>
-                  </>
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDragCancel={handleDragCancel}
+          >
+            <SortableContext items={draggableIds} strategy={verticalListSortingStrategy}>
+              <ul className="flex flex-col gap-2">
+                {upNext.map((row) =>
+                  isDraggableUpNextRow(row) ? (
+                    <DraggableUpNextRow key={row.key} row={row} timeFormat={timeFormat} />
+                  ) : (
+                    <StaticUpNextRow key={row.key} row={row} timeFormat={timeFormat} />
+                  ),
                 )}
-              </li>
-            ))}
-          </ul>
+              </ul>
+            </SortableContext>
+            <DragOverlay>
+              {activeRow && (
+                <ul className="rounded-md border border-slate-300 bg-white px-2 py-1 shadow-xl">
+                  <li className="flex items-center gap-2 text-sm">
+                    <span aria-hidden="true" className="shrink-0 text-slate-300">
+                      ⠿
+                    </span>
+                    {upNextRowContent(activeRow, timeFormat)}
+                  </li>
+                </ul>
+              )}
+            </DragOverlay>
+          </DndContext>
           {moreCount > 0 && (
             <Link to="/queue" className="mt-2 inline-block text-xs text-slate-400 hover:text-slate-600 hover:underline">
               … {moreCount} more

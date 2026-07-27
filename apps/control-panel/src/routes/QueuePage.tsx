@@ -1,23 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  DndContext,
-  DragOverlay,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-  type DragStartEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  arrayMove,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
+import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type {
   NowPlayingDTO,
@@ -33,6 +17,7 @@ import { useNatsSubject } from "../lib/natsClient";
 import { useCountdownTo } from "../lib/useCountdownTo";
 import { useTimeFormat } from "../lib/useTimeFormat";
 import { buildUpNextList, type UpNextDisplayEntry } from "../lib/queueTiming";
+import { useQueueReorder } from "../lib/useQueueReorder";
 import { ComingSoon } from "../components/ComingSoon";
 import { Modal } from "../components/Modal";
 import { MediaKindBadge } from "../components/MediaKindBadge";
@@ -91,24 +76,15 @@ export function QueuePage() {
     [nowPlayingQuery.data, queueQuery.data, upcomingTriggersQuery.data],
   );
 
-  // Manual (unscheduled) items and clock-wheel rotation fills are each independently
-  // reorderable (within their own pool only -- see the reorder endpoint's `scope`); due
-  // schedule-fired items and not-yet-fired previews are read-only, positioned wherever
-  // their expected time falls.
-  const manualRows = useMemo(
-    () => mergedList.filter((row): row is QueuedRow => row.kind === "queued" && row.entry.scheduledFor === null),
-    [mergedList],
-  );
-  const manualEntries = useMemo(() => manualRows.map((row) => row.entry), [manualRows]);
-
-  const rotationRows = useMemo(
-    () =>
-      mergedList.filter(
-        (row): row is QueuedRow => row.kind === "queued" && row.entry.scheduledFor !== null && row.entry.clockWheelName !== null,
-      ),
-    [mergedList],
-  );
-  const rotationEntries = useMemo(() => rotationRows.map((row) => row.entry), [rotationRows]);
+  const {
+    manualEntries,
+    rotationEntries,
+    sensors,
+    activeId,
+    handleDragStart,
+    handleDragEnd,
+    handleDragCancel,
+  } = useQueueReorder(queueQuery.data ?? []);
 
   // Combined, in-render-order set of every draggable id -- dnd-kit's SortableContext
   // needs this to match visual order for correct drag animations/keyboard nav.
@@ -157,87 +133,7 @@ export function QueuePage() {
     },
   });
 
-  type ReorderScope = "manual" | "rotation";
-  const isDue = (item: QueueEntryDTO) => item.scheduledFor !== null && item.clockWheelName === null;
-  const isManual = (item: QueueEntryDTO) => item.scheduledFor === null;
-  const isRotation = (item: QueueEntryDTO) => item.scheduledFor !== null && item.clockWheelName !== null;
-
-  const reorderMutation = useMutation({
-    mutationFn: ({ scope, orderedIds }: { scope: ReorderScope; orderedIds: string[] }) =>
-      apiClient.patch("/queue/items/reorder", { scope, orderedIds }),
-    // Reorder the cached list immediately so a drag-drop lands exactly where it was dropped
-    // instead of snapping back until the request round-trips. The cache also holds due
-    // (scheduledFor set, not clock-wheel) items, which are never part of `orderedIds` -- keep
-    // those in place and only rewrite the pool (manual or rotation) actually being reordered,
-    // reassembled in the same [due, manual, rotation] order the server itself returns.
-    onMutate: async ({ scope, orderedIds }) => {
-      await queryClient.cancelQueries({ queryKey: QUEUE_KEY });
-      const previous = queryClient.getQueryData<QueueEntryDTO[]>(QUEUE_KEY);
-      if (previous) {
-        const due = previous.filter(isDue);
-        const manual = previous.filter(isManual);
-        const rotation = previous.filter(isRotation);
-        const pool = scope === "manual" ? manual : rotation;
-        const poolById = new Map(pool.map((item) => [item.id, item]));
-        const reorderedPool = orderedIds
-          .map((id) => poolById.get(id))
-          .filter((item): item is QueueEntryDTO => item !== undefined);
-        queryClient.setQueryData<QueueEntryDTO[]>(
-          QUEUE_KEY,
-          scope === "manual" ? [...due, ...reorderedPool, ...rotation] : [...due, ...manual, ...reorderedPool],
-        );
-      }
-      return { previous };
-    },
-    onError: (err, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(QUEUE_KEY, context.previous);
-      showToast(
-        "error",
-        `Couldn't reorder the queue: ${err instanceof ApiError ? err.message : "request failed"}`,
-      );
-    },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: QUEUE_KEY }),
-  });
-
-  function reorderTo(scope: ReorderScope, items: QueueEntryDTO[], fromIndex: number, toIndex: number) {
-    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || toIndex >= items.length) return;
-    reorderMutation.mutate({ scope, orderedIds: arrayMove(items, fromIndex, toIndex).map((item) => item.id) });
-  }
-
-  const sensors = useSensors(
-    // Requires a small drag before activating, so a plain click on the row
-    // (or on the remove button) doesn't get swallowed as a drag.
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-  const [activeId, setActiveId] = useState<string | null>(null);
   const activeRow = draggableRows.find((row) => row.entry.id === activeId) ?? null;
-
-  function handleDragStart(event: DragStartEvent) {
-    setActiveId(String(event.active.id));
-  }
-
-  function handleDragEnd(event: DragEndEvent) {
-    setActiveId(null);
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-
-    const activeEntry = draggableRows.find((row) => row.entry.id === active.id)?.entry;
-    const overEntry = draggableRows.find((row) => row.entry.id === over.id)?.entry;
-    if (!activeEntry || !overEntry) return;
-
-    // Dragging across pools (manual <-> rotation) is a no-op -- the claim priority between
-    // them is fixed regardless of position, so "moving" a rotation item above a manual one
-    // wouldn't actually change playback order and would just be misleading.
-    const activeScope: ReorderScope = isManual(activeEntry) ? "manual" : "rotation";
-    const overScope: ReorderScope = isManual(overEntry) ? "manual" : "rotation";
-    if (activeScope !== overScope) return;
-
-    const poolEntries = activeScope === "manual" ? manualEntries : rotationEntries;
-    const oldIndex = poolEntries.findIndex((item) => item.id === active.id);
-    const newIndex = poolEntries.findIndex((item) => item.id === over.id);
-    reorderTo(activeScope, poolEntries, oldIndex, newIndex);
-  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -287,7 +183,7 @@ export function QueuePage() {
           collisionDetection={closestCenter}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
-          onDragCancel={() => setActiveId(null)}
+          onDragCancel={handleDragCancel}
         >
           <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
             <table className="w-full text-left text-sm">
