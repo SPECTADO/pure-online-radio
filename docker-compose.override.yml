@@ -101,6 +101,10 @@ services:
     environment:
       # Same reasoning as control-panel-dev above.
       - VITE_DEV_API_PROXY_TARGET=http://api:3000
+      # vite.config.ts's default (localhost:8000) assumes host-side `pnpm dev`
+      # too -- reach the HLS output the same way, via the `edge` network's
+      # Docker DNS (webserver joins it and listens on 80 internally).
+      - VITE_DEV_HLS_PROXY_TARGET=http://webserver:80
     volumes:
       - "./apps/player:/app/apps/player"
       - "./packages:/app/packages"
