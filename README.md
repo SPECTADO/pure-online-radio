@@ -654,6 +654,16 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   with a `ONE_TIME` trigger and the recording already added as an item; picking a datetime and saving creates a
   real `ScheduleRule` the existing 15s scheduler tick fires like any other. Verified end-to-end against the running
   dev stack: upload → schedule → scheduler fire → encoder claim/decode/playback → advance back to the queue.
+  Voice tracks are also queueable like any other media: the Queue page's `QuickAddSection` search and the Voice
+  Track page's own row action both call the same `useAddToQueue`/`POST /queue/items` path songs and jingles already
+  use (`MediaKind.VOICE_TRACK` was already wired end-to-end server-side -- `findActiveMedia`, `toQueueEntryDTO` --
+  just missing from these two manager-facing entry points). A "Upload voice track" modal
+  (`VoiceTrackUploadModal.tsx`) posts an existing file straight to the same multipart `POST /library/voice-tracks`
+  the recorder already used, for managers who have a pre-recorded file rather than a live mic take. Each row also
+  gets a "Download" link (`GET /library/voice-tracks/:id/audio?download=1`) that sets `Content-Disposition:
+  attachment` with the track's title as filename -- a new optional param on the shared `streamAudioResponse` helper
+  every library media type's `/:id/audio` route already uses for preview, so the same mechanism is available to
+  songs/jingles/ads if they want a download link later.
 - **Stream Settings** (`StreamSettings`, Settings → Stream Settings) — codec (AAC/MP3), low/high variant bitrate,
   HLS segment length + segment count (the live-edge/time-shift/DVR window is `segmentSeconds × segmentCount`), and a
   **real** Low Latency HLS toggle. The encoder fetches this singleton row once at boot (`GET

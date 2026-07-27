@@ -41,16 +41,20 @@ voiceTracksRoutes.get("/", async (_req, res) => {
 
 // For control-panel audio preview -- streamed (not a direct MinIO URL, which a browser can
 // never reach) with Range pass-through so <audio> can seek, same as jingles/:id/audio.
+// `?download=1` additionally sets Content-Disposition so the "Download" row action gets a
+// save dialog with the voice track's title instead of playing inline.
 voiceTracksRoutes.get("/:id/audio", async (req, res) => {
   const voiceTrack = await prisma.voiceTrack.findUnique({
     where: { id: req.params.id },
-    select: { fileKey: true, fileMimeType: true },
+    select: { title: true, fileKey: true, fileMimeType: true },
   });
   if (!voiceTrack) {
     res.status(404).json({ error: "voice track not found" });
     return;
   }
-  await streamAudioResponse(req, res, voiceTrack.fileKey, voiceTrack.fileMimeType);
+  const downloadFilename =
+    req.query.download === "1" ? `${voiceTrack.title}${extensionFor(voiceTrack.fileKey, voiceTrack.fileMimeType)}` : undefined;
+  await streamAudioResponse(req, res, voiceTrack.fileKey, voiceTrack.fileMimeType, downloadFilename);
 });
 
 voiceTracksRoutes.get("/:id", async (req, res) => {

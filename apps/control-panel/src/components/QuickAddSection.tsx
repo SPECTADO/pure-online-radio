@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { JingleDTO, MediaKind, SongDTO } from "@spectado/shared-types";
+import type { JingleDTO, MediaKind, SongDTO, VoiceTrackDTO } from "@spectado/shared-types";
 import { apiClient } from "../lib/apiClient";
 import { useAddToQueue } from "../lib/useAddToQueue";
 import { formatDuration } from "../lib/format";
 import { MediaKindBadge } from "./MediaKindBadge";
 
 const JINGLES_KEY = ["library", "jingles"];
+const VOICE_TRACKS_KEY = ["library", "voice-tracks"];
 const MAX_SEARCH_RESULTS = 10;
 
 interface QuickAddResult {
@@ -17,8 +18,8 @@ interface QuickAddResult {
   durationMs: number;
 }
 
-/** Search-and-add box covering both songs and jingles -- shared by the
- * Dashboard's "Quick Add" section and the Queue page. */
+/** Search-and-add box covering songs, jingles, and voice tracks -- shared by
+ * the Dashboard's "Quick Add" section and the Queue page. */
 export function QuickAddSection() {
   const addToQueue = useAddToQueue();
   const [search, setSearch] = useState("");
@@ -30,6 +31,10 @@ export function QuickAddSection() {
   const jinglesQuery = useQuery({
     queryKey: JINGLES_KEY,
     queryFn: () => apiClient.get<JingleDTO[]>("/library/jingles"),
+  });
+  const voiceTracksQuery = useQuery({
+    queryKey: VOICE_TRACKS_KEY,
+    queryFn: () => apiClient.get<VoiceTrackDTO[]>("/library/voice-tracks"),
   });
 
   const results = useMemo<QuickAddResult[]>(() => {
@@ -44,8 +49,18 @@ export function QuickAddSection() {
       .filter((jingle) => jingle.isActive && jingle.title.toLowerCase().includes(q))
       .map((jingle) => ({ mediaKind: "JINGLE", id: jingle.id, title: jingle.title, subtitle: null, durationMs: jingle.durationMs }));
 
-    return [...songResults, ...jingleResults].slice(0, MAX_SEARCH_RESULTS);
-  }, [songsQuery.data, jinglesQuery.data, search]);
+    const voiceTrackResults: QuickAddResult[] = (voiceTracksQuery.data ?? [])
+      .filter((voiceTrack) => voiceTrack.isActive && voiceTrack.title.toLowerCase().includes(q))
+      .map((voiceTrack) => ({
+        mediaKind: "VOICE_TRACK",
+        id: voiceTrack.id,
+        title: voiceTrack.title,
+        subtitle: null,
+        durationMs: voiceTrack.durationMs,
+      }));
+
+    return [...songResults, ...jingleResults, ...voiceTrackResults].slice(0, MAX_SEARCH_RESULTS);
+  }, [songsQuery.data, jinglesQuery.data, voiceTracksQuery.data, search]);
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-6">
@@ -55,13 +70,15 @@ export function QuickAddSection() {
         type="text"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search songs and jingles by title…"
+        placeholder="Search songs, jingles, and voice tracks by title…"
         className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
       />
 
       {search.trim() !== "" && (
         <div className="mt-3 divide-y divide-slate-100 overflow-hidden rounded-md border border-slate-100">
-          {results.length === 0 && <p className="px-4 py-3 text-sm text-slate-500">No matching songs or jingles.</p>}
+          {results.length === 0 && (
+            <p className="px-4 py-3 text-sm text-slate-500">No matching songs, jingles, or voice tracks.</p>
+          )}
           {results.map((result) => (
             <div key={`${result.mediaKind}-${result.id}`} className="flex items-center justify-between gap-3 px-4 py-2">
               <div className="min-w-0 flex-1">

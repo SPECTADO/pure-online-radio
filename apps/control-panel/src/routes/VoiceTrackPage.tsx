@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { VoiceTrackDTO } from "@spectado/shared-types";
-import { apiClient, ApiError } from "../lib/apiClient";
+import { apiClient, ApiError, apiUrl } from "../lib/apiClient";
 import { showToast } from "../lib/toastStore";
 import { useAudioInputDevices } from "../lib/useAudioInputDevices";
+import { useAddToQueue } from "../lib/useAddToQueue";
 import { useUploadQueueStore } from "../lib/uploadQueueStore";
 import { useAudioPreviewStore } from "../lib/audioPreviewStore";
 import { encodeWav } from "../lib/wavEncoder";
@@ -15,6 +16,7 @@ import { ComingSoon } from "../components/ComingSoon";
 import { Modal } from "../components/Modal";
 import { PreviewButton } from "../components/PreviewButton";
 import { VoiceTrackEditor } from "../components/VoiceTrackEditor";
+import { VoiceTrackUploadModal } from "../components/VoiceTrackUploadModal";
 import { ScheduleRuleModal } from "../components/ScheduleRuleModal";
 import type { PickedScheduleItem } from "../components/ScheduleItemPicker";
 
@@ -209,8 +211,10 @@ function EditSection({
 export function VoiceTrackPage() {
   const queryClient = useQueryClient();
   const timeFormat = useTimeFormat();
+  const addToQueue = useAddToQueue();
   const stopPreview = useAudioPreviewStore((s) => s.stop);
   const [recordedBuffer, setRecordedBuffer] = useState<AudioBuffer | null>(null);
+  const [showUpload, setShowUpload] = useState(false);
   const [scheduling, setScheduling] = useState<VoiceTrackDTO | null>(null);
   const [pendingDelete, setPendingDelete] = useState<VoiceTrackDTO | null>(null);
 
@@ -239,7 +243,16 @@ export function VoiceTrackPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-semibold text-slate-900">Voice Track</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold text-slate-900">Voice Track</h1>
+        <button
+          type="button"
+          onClick={() => setShowUpload(true)}
+          className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+        >
+          Upload voice track
+        </button>
+      </div>
 
       {recordedBuffer ? (
         <EditSection buffer={recordedBuffer} onDiscard={() => setRecordedBuffer(null)} />
@@ -285,9 +298,29 @@ export function VoiceTrackPage() {
                     <td className="px-4 py-3 text-slate-600">{formatDateTime(voiceTrack.createdAt, timeFormat)}</td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            addToQueue.mutate({
+                              mediaKind: "VOICE_TRACK",
+                              mediaId: voiceTrack.id,
+                              title: voiceTrack.title,
+                            })
+                          }
+                          className={rowActionButton}
+                        >
+                          Add to queue
+                        </button>
                         <button type="button" onClick={() => setScheduling(voiceTrack)} className={rowActionButton}>
                           Schedule
                         </button>
+                        <a
+                          href={apiUrl(`/library/voice-tracks/${voiceTrack.id}/audio?download=1`)}
+                          download
+                          className={rowActionButton}
+                        >
+                          Download
+                        </a>
                         <button
                           type="button"
                           onClick={() => setPendingDelete(voiceTrack)}
@@ -304,6 +337,8 @@ export function VoiceTrackPage() {
           </div>
         )}
       </section>
+
+      {showUpload && <VoiceTrackUploadModal onClose={() => setShowUpload(false)} />}
 
       {scheduling && (
         <ScheduleRuleModal
