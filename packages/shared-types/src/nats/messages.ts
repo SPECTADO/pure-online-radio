@@ -67,6 +67,13 @@ export type RelayCancelCommand = z.infer<typeof RelayCancelCommandSchema>;
 
 // --- encoder status (encoder -> api, api -> control-panel via re-broadcast or direct subscribe) ---
 
+// 3x the encoder's default 5s heartbeat interval (HEARTBEAT_INTERVAL_MS) -- enough
+// slack for a slow tick without flagging a merely-late heartbeat as down. Shared
+// so the api's /status route and the control panel's own on-air badge (which
+// re-derives staleness client-side between heartbeats, rather than polling
+// /status) can't drift apart on what "stale" means.
+export const HEARTBEAT_STALE_MS = 15_000;
+
 export const HeartbeatStatusSchema = z.object({
   ts: z.string().datetime(),
   uptimeSec: z.number().nonnegative(),
@@ -77,6 +84,10 @@ export const HeartbeatStatusSchema = z.object({
   }),
   mixerUnderruns: z.number().int().nonnegative(),
   hlsWriterHealthy: z.boolean(),
+  // Filename (not full path) of the most recent complete segment the active
+  // HLS muxer (ffmpeg or, in low-latency mode, gpac) has written -- null
+  // before the first segment closes, e.g. moments after a fresh spawn.
+  currentSegment: z.string().nullable(),
 });
 export type HeartbeatStatus = z.infer<typeof HeartbeatStatusSchema>;
 

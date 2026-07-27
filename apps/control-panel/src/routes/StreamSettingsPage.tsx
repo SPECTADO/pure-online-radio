@@ -162,7 +162,6 @@ export function StreamSettingsPage() {
                   value={segmentSeconds}
                   onChange={(e) => setSegmentSeconds(Number(e.target.value))}
                   className={inputClass}
-                  disabled={lowLatencyEnabled}
                 />
               </label>
               <label>
@@ -179,9 +178,8 @@ export function StreamSettingsPage() {
             </div>
 
             <p className="mt-2 text-xs text-slate-400">
-              {lowLatencyEnabled
-                ? "Ignored while Low Latency HLS is on (below) -- that mode forces a fixed short segment length."
-                : `~${formatUptime(timeShiftWindowSeconds)} time-shift/DVR window at these values.`}
+              ~{formatUptime(timeShiftWindowSeconds)} time-shift/DVR window at these values
+              {lowLatencyEnabled ? " (also sets the LL-HLS part size, below)" : ""}.
             </p>
           </div>
 
@@ -190,9 +188,11 @@ export function StreamSettingsPage() {
               Low Latency HLS
             </h2>
             <p className="mb-4 text-xs text-slate-500">
-              ffmpeg's HLS muxer has no true sub-second partial-segment (LL-HLS) support, so this
-              forces much shorter full segments and a tighter live-edge window instead (~2-4s
-              glass-to-glass instead of the usual ~16-32s) -- still standard, fully compatible HLS.
+              Real LL-HLS: fragmented MP4 (CMAF) with genuine EXT-X-PART/PRELOAD-HINT byte-range
+              parts, packaged by GPAC alongside ffmpeg (ffmpeg's own HLS muxer has no
+              partial-segment support at all). Cuts glass-to-glass latency from ~16-32s down to
+              roughly 1-2s. Requires the AAC codec above -- MP3-in-fMP4 isn't a supported HLS
+              combination.
             </p>
 
             <div className="flex gap-2">
@@ -200,8 +200,9 @@ export function StreamSettingsPage() {
                 <button
                   key={String(value)}
                   type="button"
+                  disabled={value && codec === "MP3"}
                   onClick={() => setLowLatencyEnabled(value)}
-                  className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+                  className={`rounded-md px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${
                     lowLatencyEnabled === value
                       ? "bg-slate-900 text-white"
                       : "border border-slate-300 text-slate-700 hover:bg-slate-50"
@@ -211,6 +212,9 @@ export function StreamSettingsPage() {
                 </button>
               ))}
             </div>
+            {codec === "MP3" && (
+              <p className="mt-2 text-xs text-slate-400">Switch the codec to AAC above to enable this.</p>
+            )}
           </div>
 
           <div className="flex items-center justify-between border-t border-slate-100 pt-4">

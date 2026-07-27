@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from "react";
 import { useUploadQueueStore } from "../lib/uploadQueueStore";
 import { Modal } from "./Modal";
+import { DateTimePicker } from "./DateTimePicker";
 import { fromDatetimeLocalValue } from "../lib/format";
 
 const inputClass =
@@ -100,23 +101,11 @@ export function AdUploadModal({ onClose }: { onClose: () => void }) {
         <div className="grid grid-cols-2 gap-4">
           <label>
             <span className={labelClass}>Active from{isBatch ? " -- applied to every file" : ""}</span>
-            <input
-              type="datetime-local"
-              required
-              value={activeFrom}
-              onChange={(e) => setActiveFrom(e.target.value)}
-              className={inputClass}
-            />
+            <DateTimePicker value={activeFrom} onChange={setActiveFrom} />
           </label>
           <label>
             <span className={labelClass}>Active until{isBatch ? " -- applied to every file" : ""}</span>
-            <input
-              type="datetime-local"
-              required
-              value={activeUntil}
-              onChange={(e) => setActiveUntil(e.target.value)}
-              className={inputClass}
-            />
+            <DateTimePicker value={activeUntil} onChange={setActiveUntil} />
           </label>
         </div>
         <p className="-mt-2 text-xs text-slate-400">

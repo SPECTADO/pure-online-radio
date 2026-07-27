@@ -109,6 +109,11 @@ function ComponentCard({ component }: { component: ComponentStatusDTO }) {
       {component.uptimeSec !== null && (
         <div className="text-sm text-slate-500">Uptime: {formatUptime(component.uptimeSec)}</div>
       )}
+      {component.currentSegment && (
+        <div className="truncate text-xs text-slate-400" title={component.currentSegment}>
+          Segment: {component.currentSegment}
+        </div>
+      )}
       {component.message && <div className="text-xs text-red-600">{component.message}</div>}
     </div>
   );

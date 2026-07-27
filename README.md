@@ -597,17 +597,49 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   scheduled items.
 - **Stream Settings** (`StreamSettings`, Settings → Stream Settings) — codec (AAC/MP3), low/high variant bitrate,
   HLS segment length + segment count (the live-edge/time-shift/DVR window is `segmentSeconds × segmentCount`), and a
-  Low Latency HLS toggle. The encoder fetches this singleton row once at boot (`GET /internal/stream-settings`,
-  retried a few times, falling back to the pipeline's original hardcoded values if the API never answers) and
-  builds its ffmpeg HLS argv from it — there is no live-reload path, so a saved change only takes effect the next
-  time the encoder process restarts (the settings page says so). "Low Latency HLS" does **not** mean true
-  partial-segment/LL-HLS: the installed ffmpeg's HLS muxer has no `EXT-X-PART`/`EXT-X-PRELOAD-HINT` capability at
-  all (verified directly against `ffmpeg -h muxer=hls`, not just docs), so the toggle instead forces a much shorter
-  fixed full-segment length/list size (~2-4s glass-to-glass instead of the usual ~16-32s), still standard mpegts
-  segments with no player-compatibility cost. Orphaned `.ts` segments that could previously accumulate forever
-  across encoder crash-restarts (ffmpeg's own `delete_segments` flag only prunes segments *its own* process
-  created — a fresh process after a crash never knew about the previous one's files) are now fixed by wiping and
-  recreating the output directories on every ffmpeg (re)spawn, not just the initial boot.
+  **real** Low Latency HLS toggle. The encoder fetches this singleton row once at boot (`GET
+  /internal/stream-settings`, retried a few times, falling back to the pipeline's original hardcoded values if the
+  API never answers) and picks its pipeline from it — there is no live-reload path, so a saved change only takes
+  effect the next time the encoder process restarts (the settings page says so). Orphaned segments that could
+  previously accumulate forever across encoder crash-restarts (a muxer's own segment-deletion logic only prunes
+  segments *its own* process created — a fresh process after a crash never knew about the previous one's files) are
+  fixed by wiping and recreating the output directories on every (re)spawn of either pipeline below, not just the
+  initial boot.
+
+  **Two genuinely different pipelines, selected by `lowLatencyEnabled`** (`apps/encoder/src/index.ts` constructs
+  one or the other, never both):
+  - **Standard** (`lowLatencyEnabled: false`) — `apps/encoder/src/process/masterEncoder.ts`, unchanged from before
+    this feature: a single ffmpeg process does encode *and* HLS muxing (`-f hls`, mpegts segments) in one step.
+  - **Low Latency HLS** (`lowLatencyEnabled: true`) — `apps/encoder/src/process/llHlsEncoder.ts`, a real,
+    spec-compliant LL-HLS pipeline (`EXT-X-PART`/`EXT-X-PRELOAD-HINT`, byte-range parts), *not* the old
+    reduced-segment-length approximation this feature originally shipped with. ffmpeg's own HLS muxer has zero
+    partial-segment capability (verified directly against `ffmpeg -h muxer=hls`, not assumed) and no ffmpeg version
+    or build flag adds it — that finding is what justified reaching for a second tool rather than a
+    ./configure/recompile. Of the real alternatives investigated, Shaka Packager only implements low-latency
+    **DASH**, not HLS; **GPAC** (the `gpac` CLI) is the one that genuinely implements the modern spec. The pipeline
+    is one ffmpeg process (encode-only, no muxing — asplits into the two bitrate variants same as the standard
+    pipeline, writes ADTS AAC into two named FIFOs) feeding a single `gpac` process (one dasher invocation, two
+    `-i` inputs each tagged with its own `#Bandwidth`/`#HLSPL`, `llhls=br` for byte-range parts) that produces the
+    master playlist and both variant playlists/segments together. The two processes are supervised as one atomic
+    group (`LowLatencyEncoder`, generalizing `ProcessSupervisor`'s crash/backoff shape to a pair that depends on
+    each other) since either one dying alone just stalls the other rather than recovering cleanly. Requires the AAC
+    codec (enforced by `UpdateStreamSettingsRequestSchema`'s validation) — MP3-in-fMP4 isn't part of Apple's HLS
+    authoring spec. `gpac` has no Debian/Ubuntu package at all, so `apps/encoder/Dockerfile` builds it from source
+    (`--static-bin`, ~40s, fully static binary per `ldd` — nothing extra needed at runtime) in its own stage rather
+    than installing a build toolchain into the final image.
+
+  All of the above (multi-input single-`gpac`-process dashing, a from-source build against this project's exact
+  Debian bookworm-slim base, and plain static nginx correctly serving byte-range `Range` requests against a segment
+  file `gpac` is still actively appending to) was verified empirically in a standalone spike before writing any of
+  the real integration — including the two non-obvious gotchas it surfaced: GPAC's own doc example chains
+  `reframer:rt=on` onto an already real-time-paced source, which double-regulates timing and silently balloons
+  latency (measured ~18s) — don't do that when ffmpeg is already pacing the feed; and a FIFO bind-mounted from the
+  **host** into a container doesn't reliably cross the Docker Desktop macOS boundary (silent no-op, not an error) —
+  only same-container FIFOs (what `LowLatencyEncoder` actually uses) are safe here. Not implemented: blocking
+  playlist reload (`_HLS_msn`/`_HLS_part`) — plain static nginx can't do that by design, so clients fall back to
+  polling, which is spec-legal but not maximally optimal; and no real browser/hls.js playback test (no browser
+  automation available in the environment this was built in) — the manifest correctness and byte-range serving were
+  verified directly instead (real `EXT-X-PART`/`BYTERANGE`/`EXT-X-PRELOAD-HINT` tags, `ffprobe`-decoded audio).
 
 **Stubbed (real routes/modules exist, but return placeholder data or `501 Not Implemented`):**
 

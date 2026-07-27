@@ -1,5 +1,7 @@
 import type { ScheduleInsertionMode, ScheduleTriggerType } from "@spectado/shared-types";
 import type { TriggerFormState } from "../lib/scheduleTrigger";
+import { DateTimePicker } from "./DateTimePicker";
+import { TimePicker } from "./TimePicker";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -62,12 +64,7 @@ export function ScheduleTriggerFields({
       {value.triggerType === "ONE_TIME" && (
         <label>
           <span className={labelClass}>Date &amp; time</span>
-          <input
-            type="datetime-local"
-            value={value.runAt}
-            onChange={(e) => set("runAt", e.target.value)}
-            className={inputClass}
-          />
+          <DateTimePicker value={value.runAt} onChange={(runAt) => set("runAt", runAt)} />
         </label>
       )}
 
@@ -98,12 +95,7 @@ export function ScheduleTriggerFields({
       {value.triggerType === "WEEKLY" && (
         <label>
           <span className={labelClass}>Time of day</span>
-          <input
-            type="time"
-            value={value.timeOfDay}
-            onChange={(e) => set("timeOfDay", e.target.value)}
-            className={inputClass}
-          />
+          <TimePicker value={value.timeOfDay} onChange={(timeOfDay) => set("timeOfDay", timeOfDay)} />
         </label>
       )}
 
@@ -122,21 +114,11 @@ export function ScheduleTriggerFields({
           <div className="grid grid-cols-2 gap-4">
             <label>
               <span className={labelClass}>Window start (optional, default midnight)</span>
-              <input
-                type="time"
-                value={value.windowStart}
-                onChange={(e) => set("windowStart", e.target.value)}
-                className={inputClass}
-              />
+              <TimePicker value={value.windowStart} onChange={(windowStart) => set("windowStart", windowStart)} />
             </label>
             <label>
               <span className={labelClass}>Window end (optional, default end of day)</span>
-              <input
-                type="time"
-                value={value.windowEnd}
-                onChange={(e) => set("windowEnd", e.target.value)}
-                className={inputClass}
-              />
+              <TimePicker value={value.windowEnd} onChange={(windowEnd) => set("windowEnd", windowEnd)} />
             </label>
           </div>
         </>

@@ -1,4 +1,5 @@
 import { rowActionButton, rowActionButtonDanger } from "../lib/buttonStyles";
+import { TimePicker } from "./TimePicker";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -9,9 +10,6 @@ export interface EditableSlot {
   startTime: string; // "HH:mm"
   endTime: string;
 }
-
-const timeInputClass =
-  "rounded-md border border-slate-300 px-2 py-1 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
 
 /** Add/remove/edit a clock wheel's day-of-week + time-range windows. Not rendered at all
  * for the default wheel (it has no slots of its own -- see ClockWheelModal). */
@@ -69,20 +67,18 @@ export function ClockWheelSlotEditor({
           <div className="flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-2 text-sm text-slate-600">
               From
-              <input
-                type="time"
+              <TimePicker
                 value={slot.startTime}
-                onChange={(e) => updateSlot(slot.key, { startTime: e.target.value })}
-                className={timeInputClass}
+                onChange={(startTime) => updateSlot(slot.key, { startTime })}
+                className="w-32"
               />
             </label>
             <label className="flex items-center gap-2 text-sm text-slate-600">
               To
-              <input
-                type="time"
+              <TimePicker
                 value={slot.endTime}
-                onChange={(e) => updateSlot(slot.key, { endTime: e.target.value })}
-                className={timeInputClass}
+                onChange={(endTime) => updateSlot(slot.key, { endTime })}
+                className="w-32"
               />
             </label>
             <button type="button" onClick={() => removeSlot(slot.key)} className={`ml-auto ${rowActionButtonDanger}`}>

@@ -7,6 +7,7 @@ import { fromDatetimeLocalValue, toDatetimeLocalValue } from "../lib/format";
 import { DEFAULT_TRIGGER_FORM_STATE, triggerFormStateToPayload, triggerToFormState } from "../lib/scheduleTrigger";
 import { Modal } from "./Modal";
 import { ScheduleTriggerFields } from "./ScheduleTriggerFields";
+import { DateTimePicker } from "./DateTimePicker";
 
 const inputClass =
   "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
@@ -98,7 +99,7 @@ export function ExternalStreamModal({ stream, onClose }: { stream?: ExternalStre
           {endBehavior === "AT_TIME" && (
             <label className="mt-3 block">
               <span className={labelClass}>Stop at</span>
-              <input type="datetime-local" value={endAt} onChange={(e) => setEndAt(e.target.value)} className={inputClass} />
+              <DateTimePicker value={endAt} onChange={setEndAt} />
             </label>
           )}
 

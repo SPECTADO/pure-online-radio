@@ -9,6 +9,11 @@ export const ComponentStatusSchema = z.object({
   health: ComponentHealthSchema,
   uptimeSec: z.number().nonnegative().nullable(),
   message: z.string().nullable(),
+  // Only ever set for the "encoder" component -- the filename of the segment
+  // it's currently writing (see HeartbeatStatus.currentSegment). Null for
+  // every other component, and for encoder itself before a heartbeat with a
+  // segment has arrived.
+  currentSegment: z.string().nullable(),
 });
 export type ComponentStatusDTO = z.infer<typeof ComponentStatusSchema>;
 

@@ -15,6 +15,7 @@ import {
 } from "@spectado/shared-types";
 import type { NatsClient } from "./natsClient.js";
 import type { HealthMonitor } from "../health/healthMonitor.js";
+import { getCurrentSegmentFilename } from "../health/currentSegment.js";
 import type { Mixer } from "../core/mixer.js";
 import type { Logger } from "../util/logger.js";
 
@@ -31,6 +32,7 @@ export class StatusPublisher {
     private readonly healthMonitor: HealthMonitor,
     private readonly mixer: Mixer,
     private readonly logger: Logger,
+    private readonly hlsOutputDir: string,
   ) {}
 
   publishHeartbeat(): void {
@@ -44,6 +46,7 @@ export class StatusPublisher {
       },
       mixerUnderruns: this.mixer.underrunCount,
       hlsWriterHealthy: this.healthMonitor.isMasterEncoderHealthy(),
+      currentSegment: getCurrentSegmentFilename(this.hlsOutputDir),
     };
     const validated = HeartbeatStatusSchema.parse(status);
     this.natsClient.publish(NATS_SUBJECTS.encoderStatus.heartbeat, validated);

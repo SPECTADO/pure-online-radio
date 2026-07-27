@@ -6,6 +6,7 @@ import { FifoWriter } from "./core/fifoWriter.js";
 import { Mixer } from "./core/mixer.js";
 import { SilenceSource } from "./sources/silenceSource.js";
 import { MasterEncoder } from "./process/masterEncoder.js";
+import { LowLatencyEncoder } from "./process/llHlsEncoder.js";
 import { NatsClient } from "./nats/natsClient.js";
 import { startCommandRouter } from "./nats/commandRouter.js";
 import { StatusPublisher } from "./nats/statusPublisher.js";
@@ -17,6 +18,13 @@ import { LiveMicServer } from "./ws/liveMicServer.js";
 
 const BOOT_STREAM_SETTINGS_ATTEMPTS = 5;
 const BOOT_STREAM_SETTINGS_RETRY_DELAY_MS = 1000;
+
+/** Structural shape shared by MasterEncoder (standard, mpegts) and LowLatencyEncoder (real LL-HLS, ffmpeg+gpac). */
+interface Encoder {
+  start(): void;
+  stop(): void;
+  isHealthy(): boolean;
+}
 
 /**
  * Stream Settings (codec/bitrate/segment/low-latency) are read once here at
@@ -43,14 +51,16 @@ async function main(): Promise<void> {
   const config = loadConfig();
   logger.info({ nodeEnv: config.nodeEnv, hlsOutputDir: config.hlsOutputDir, fifoPath: config.pcmFifoPath }, "starting spectado encoder");
 
-  // --- the one thing that must genuinely work: FIFO -> mixer output -> ffmpeg HLS encode ---
+  // --- the one thing that must genuinely work: FIFO -> mixer output -> HLS encode ---
   const apiClient = new ApiClient(config, logger);
   const streamSettings = await fetchStreamSettingsAtBoot(apiClient, logger);
   logger.info({ streamSettings }, "using stream settings");
-  const masterEncoder = new MasterEncoder(config, streamSettings, logger);
-  masterEncoder.start();
+  const encoder: Encoder = streamSettings.lowLatencyEnabled
+    ? new LowLatencyEncoder(config, streamSettings, logger)
+    : new MasterEncoder(config, streamSettings, logger);
+  encoder.start();
 
-  const healthMonitor = new HealthMonitor(masterEncoder);
+  const healthMonitor = new HealthMonitor(encoder);
 
   const fifoWriter = new FifoWriter(config.pcmFifoPath, logger);
   fifoWriter.open();
@@ -61,7 +71,7 @@ async function main(): Promise<void> {
   // --- control plane: NATS commands in, status out ---
   const natsClient = await NatsClient.connect(config, logger);
 
-  const statusPublisher = new StatusPublisher(natsClient, healthMonitor, mixer, logger);
+  const statusPublisher = new StatusPublisher(natsClient, healthMonitor, mixer, logger, config.hlsOutputDir);
   const heartbeatTimer = statusPublisher.startHeartbeatLoop(config.heartbeatIntervalMs);
 
   // --- playback queue: real ffmpeg-decoded audio, one queue item after
@@ -84,7 +94,7 @@ async function main(): Promise<void> {
     clearInterval(heartbeatTimer);
     liveMicServer.stop();
     mixer.stop();
-    masterEncoder.stop();
+    encoder.stop();
     fifoWriter.close();
 
     try {

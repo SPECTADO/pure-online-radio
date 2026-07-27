@@ -6,13 +6,6 @@ import type { Logger } from "../util/logger.js";
 import { FfmpegProcess } from "./ffmpegProcess.js";
 import { ProcessSupervisor } from "./processSupervisor.js";
 
-// ffmpeg's own HLS muxer has no partial-segment/EXT-X-PART capability at all
-// (verified against the actual installed build -- `ffmpeg -h muxer=hls` has
-// no such option in any version), so "low latency" here means forcing much
-// shorter *full* segments/list size instead of true sub-second LL-HLS.
-const LOW_LATENCY_SEGMENT_SECONDS = 1;
-const LOW_LATENCY_LIST_SIZE = 3;
-
 const CODEC_ENCODER_NAME: Record<StreamCodec, string> = {
   AAC: "aac",
   MP3: "libmp3lame",
@@ -25,11 +18,14 @@ const CODEC_ENCODER_NAME: Record<StreamCodec, string> = {
  * as an HLS master playlist + two variant playlists under HLS_OUTPUT_DIR,
  * via ffmpeg's -var_stream_map/%v mechanism. Exported standalone (not just
  * inlined in the class) so it can be unit-tested without spawning anything.
+ *
+ * Only used when StreamSettings.lowLatencyEnabled is false -- the true case
+ * is handled entirely by llHlsEncoder.ts's LowLatencyEncoder instead (a
+ * genuine ffmpeg+gpac LL-HLS pipeline), selected in index.ts before either
+ * class is ever constructed.
  */
 export function buildMasterEncoderArgs(config: EncoderConfig, stream: StreamSettingsDTO): string[] {
   const encoderName = CODEC_ENCODER_NAME[stream.codec];
-  const segmentSeconds = stream.lowLatencyEnabled ? LOW_LATENCY_SEGMENT_SECONDS : stream.segmentSeconds;
-  const listSize = stream.lowLatencyEnabled ? LOW_LATENCY_LIST_SIZE : stream.segmentCount;
 
   return [
     "-nostdin",
@@ -74,9 +70,9 @@ export function buildMasterEncoderArgs(config: EncoderConfig, stream: StreamSett
     "-f",
     "hls",
     "-hls_time",
-    String(segmentSeconds),
+    String(stream.segmentSeconds),
     "-hls_list_size",
-    String(listSize),
+    String(stream.segmentCount),
     "-hls_flags",
     "delete_segments+append_list+independent_segments+program_date_time",
     "-hls_segment_type",

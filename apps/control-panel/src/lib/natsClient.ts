@@ -107,7 +107,8 @@ class NatsClient {
 
 export const natsClient = new NatsClient();
 
-/** React hook: live connection status, for ConnectionStatusBadge and friends. */
+/** React hook: live connection status -- consumed by useEncoderOnAirStatus, not
+ * a reliable "is the encoder on air" signal by itself (see that hook's doc). */
 export function useConnectionStatus(): ConnectionStatus {
   const [status, setStatus] = useState(natsClient.getStatus());
   useEffect(() => natsClient.onStatusChange(setStatus), []);

@@ -29,7 +29,7 @@ export class FfmpegProcess extends EventEmitter {
   }
 
   start(): void {
-    this.logger.info({ command: this.command, args: this.args }, "spawning ffmpeg process");
+    this.logger.info({ command: this.command, args: this.args }, "spawning child process");
     const child = spawn(this.command, this.args, { stdio: ["pipe", "pipe", "pipe"] });
     this.child = child;
 

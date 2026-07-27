@@ -4,6 +4,7 @@ import type { AdDTO } from "@spectado/shared-types";
 import { apiClient, ApiError } from "../lib/apiClient";
 import { showToast } from "../lib/toastStore";
 import { Modal } from "./Modal";
+import { DateTimePicker } from "./DateTimePicker";
 import { fromDatetimeLocalValue, toDatetimeLocalValue } from "../lib/format";
 
 const inputClass =
@@ -57,23 +58,11 @@ export function AdEditModal({ ad, onClose }: { ad: AdDTO; onClose: () => void })
         <div className="grid grid-cols-2 gap-4">
           <label>
             <span className={labelClass}>Active from</span>
-            <input
-              type="datetime-local"
-              required
-              value={activeFrom}
-              onChange={(e) => setActiveFrom(e.target.value)}
-              className={inputClass}
-            />
+            <DateTimePicker value={activeFrom} onChange={setActiveFrom} />
           </label>
           <label>
             <span className={labelClass}>Active until</span>
-            <input
-              type="datetime-local"
-              required
-              value={activeUntil}
-              onChange={(e) => setActiveUntil(e.target.value)}
-              className={inputClass}
-            />
+            <DateTimePicker value={activeUntil} onChange={setActiveUntil} />
           </label>
         </div>
 

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "@spectado/database";
 import {
+  HEARTBEAT_STALE_MS,
   SystemStatusSchema,
   type CategoryLibraryStatsDTO,
   type ComponentStatusDTO,
@@ -24,7 +25,7 @@ function describeError(err: unknown): string {
 }
 
 function checkApi(): ComponentStatusDTO {
-  return { key: "api", label: "API", health: "ok", uptimeSec: process.uptime(), message: null };
+  return { key: "api", label: "API", health: "ok", uptimeSec: process.uptime(), message: null, currentSegment: null };
 }
 
 async function checkDatabase(): Promise<ComponentStatusDTO> {
@@ -36,18 +37,32 @@ async function checkDatabase(): Promise<ComponentStatusDTO> {
       { uptimeSec: unknown }[]
     >`SELECT extract(epoch FROM now() - pg_postmaster_start_time()) AS "uptimeSec"`;
     const uptimeSec = rows[0]?.uptimeSec != null ? Number(rows[0].uptimeSec) : null;
-    return { key: "database", label: "Database (Postgres)", health: "ok", uptimeSec, message: null };
+    return { key: "database", label: "Database (Postgres)", health: "ok", uptimeSec, message: null, currentSegment: null };
   } catch (err) {
-    return { key: "database", label: "Database (Postgres)", health: "error", uptimeSec: null, message: describeError(err) };
+    return {
+      key: "database",
+      label: "Database (Postgres)",
+      health: "error",
+      uptimeSec: null,
+      message: describeError(err),
+      currentSegment: null,
+    };
   }
 }
 
 async function checkRedis(): Promise<ComponentStatusDTO> {
   try {
     await redis.ping();
-    return { key: "redis", label: "Redis", health: "ok", uptimeSec: await getRedisUptimeSec(), message: null };
+    return {
+      key: "redis",
+      label: "Redis",
+      health: "ok",
+      uptimeSec: await getRedisUptimeSec(),
+      message: null,
+      currentSegment: null,
+    };
   } catch (err) {
-    return { key: "redis", label: "Redis", health: "error", uptimeSec: null, message: describeError(err) };
+    return { key: "redis", label: "Redis", health: "error", uptimeSec: null, message: describeError(err), currentSegment: null };
   }
 }
 
@@ -59,6 +74,7 @@ async function checkNats(): Promise<ComponentStatusDTO> {
     health: connected ? "ok" : "error",
     uptimeSec: connected ? await getNatsUptimeSec() : null,
     message: connected ? null : "not connected",
+    currentSegment: null,
   };
 }
 
@@ -70,17 +86,21 @@ async function checkStorage(): Promise<ComponentStatusDTO> {
     health: healthy ? "ok" : "error",
     uptimeSec: null,
     message: healthy ? null : "bucket unreachable",
+    currentSegment: null,
   };
 }
-
-// 3x the encoder's default 5s heartbeat interval (HEARTBEAT_INTERVAL_MS) --
-// enough slack for a slow tick without flagging a merely-late heartbeat as down.
-const HEARTBEAT_STALE_MS = 15_000;
 
 function checkEncoder(): ComponentStatusDTO {
   const heartbeat = getLatestHeartbeat();
   if (!heartbeat) {
-    return { key: "encoder", label: "Encoder", health: "unknown", uptimeSec: null, message: "no heartbeat received yet" };
+    return {
+      key: "encoder",
+      label: "Encoder",
+      health: "unknown",
+      uptimeSec: null,
+      message: "no heartbeat received yet",
+      currentSegment: null,
+    };
   }
 
   const ageMs = Date.now() - heartbeat.receivedAt;
@@ -91,6 +111,7 @@ function checkEncoder(): ComponentStatusDTO {
       health: "error",
       uptimeSec: heartbeat.status.uptimeSec,
       message: `no heartbeat for ${Math.round(ageMs / 1000)}s`,
+      currentSegment: heartbeat.status.currentSegment,
     };
   }
 
@@ -100,6 +121,7 @@ function checkEncoder(): ComponentStatusDTO {
     health: heartbeat.status.hlsWriterHealthy ? "ok" : "degraded",
     uptimeSec: heartbeat.status.uptimeSec,
     message: heartbeat.status.hlsWriterHealthy ? null : "HLS writer unhealthy",
+    currentSegment: heartbeat.status.currentSegment,
   };
 }
 
@@ -119,9 +141,10 @@ async function checkHttp(key: string, label: string, path: string): Promise<Comp
       health: res.ok ? "ok" : "degraded",
       uptimeSec: null,
       message: res.ok ? null : `HTTP ${res.status}`,
+      currentSegment: null,
     };
   } catch (err) {
-    return { key, label, health: "error", uptimeSec: null, message: describeError(err) };
+    return { key, label, health: "error", uptimeSec: null, message: describeError(err), currentSegment: null };
   }
 }
 

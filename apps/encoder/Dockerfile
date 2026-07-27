@@ -32,6 +32,25 @@
 # for exactly that reason. If shared-types ever grows an actual build step,
 # this can revert to plain `node dist/index.js`.
 
+# Builds the `gpac` CLI from source for the Low Latency HLS pipeline
+# (llHlsEncoder.ts) -- there's no Debian/Ubuntu apt package for it, and
+# ffmpeg's own HLS muxer has no real partial-segment/EXT-X-PART support at
+# all (verified directly against the installed ffmpeg build before reaching
+# for GPAC, not just assumed). FROM the same base image as `base` below,
+# rather than FROM base itself, to avoid a circular stage dependency (`base`
+# copies the compiled binary from here) while still guaranteeing the same
+# glibc. Only needed to build: --static-bin produces a single, fully static
+# binary (confirmed via `ldd` -- "not a dynamic executable"), so nothing
+# from this stage's build toolchain needs to survive into `base`/runtime,
+# just the one COPY below.
+FROM node:22-bookworm-slim AS gpac-builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential pkg-config git zlib1g-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 https://github.com/gpac/gpac.git /gpac_public
+WORKDIR /gpac_public
+RUN ./configure --static-bin && make -j"$(nproc)" && make install
+
 FROM node:22-bookworm-slim AS base
 # ffmpeg lives on this shared base (not just the final runtime stage) so the
 # docker-compose.override.yml dev service — which targets "builder" directly
@@ -39,6 +58,7 @@ FROM node:22-bookworm-slim AS base
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=gpac-builder /usr/local/bin/gpac /usr/local/bin/gpac
 
 FROM base AS builder
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate

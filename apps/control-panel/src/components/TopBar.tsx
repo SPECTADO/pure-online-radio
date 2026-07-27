@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { useAuthStore } from "../lib/authStore";
-import { ConnectionStatusBadge } from "./ConnectionStatusBadge";
+import { EncoderStatusBadge } from "./EncoderStatusBadge";
 
 export function TopBar() {
   const user = useAuthStore((s) => s.user);
@@ -16,7 +16,7 @@ export function TopBar() {
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6">
       <div />
       <div className="flex items-center gap-4">
-        <ConnectionStatusBadge />
+        <EncoderStatusBadge />
         {user && (
           <span className="text-sm text-slate-600">
             {user.username} <span className="text-slate-400">&middot;</span>{" "}
