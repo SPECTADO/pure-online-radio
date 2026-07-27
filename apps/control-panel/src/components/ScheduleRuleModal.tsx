@@ -3,7 +3,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { ScheduleRuleDTO } from "@spectado/shared-types";
 import { apiClient, ApiError } from "../lib/apiClient";
 import { showToast } from "../lib/toastStore";
-import { DEFAULT_TRIGGER_FORM_STATE, triggerFormStateToPayload, triggerToFormState } from "../lib/scheduleTrigger";
+import {
+  DEFAULT_TRIGGER_FORM_STATE,
+  triggerFormStateToPayload,
+  triggerToFormState,
+  type TriggerFormState,
+} from "../lib/scheduleTrigger";
 import { Modal } from "./Modal";
 import { ScheduleTriggerFields } from "./ScheduleTriggerFields";
 import { ScheduleItemPicker, type PickedScheduleItem } from "./ScheduleItemPicker";
@@ -14,11 +19,32 @@ const labelClass = "mb-1 block text-sm font-medium text-slate-700";
 
 const SCHEDULE_KEY = ["schedule"];
 
-export function ScheduleRuleModal({ rule, onClose }: { rule?: ScheduleRuleDTO; onClose: () => void }) {
+/**
+ * `rule` puts the modal in edit mode (PATCH an existing rule). For creating a new rule with
+ * some fields pre-seeded -- e.g. the Voice Track page opening this with the recording already
+ * added as an item and a ONE_TIME trigger ready for a datetime -- pass `initialName`/
+ * `initialItems`/`initialTrigger` instead; they're only read on first render (ignored once
+ * `rule` is set) and every existing caller (SchedulePage) is unaffected by their absence.
+ */
+export function ScheduleRuleModal({
+  rule,
+  initialName,
+  initialItems,
+  initialTrigger,
+  onClose,
+}: {
+  rule?: ScheduleRuleDTO;
+  initialName?: string;
+  initialItems?: PickedScheduleItem[];
+  initialTrigger?: TriggerFormState;
+  onClose: () => void;
+}) {
   const queryClient = useQueryClient();
-  const [name, setName] = useState(rule?.name ?? "");
+  const [name, setName] = useState(rule?.name ?? initialName ?? "");
   const [isActive, setIsActive] = useState(rule?.isActive ?? true);
-  const [trigger, setTrigger] = useState(rule ? triggerToFormState(rule) : DEFAULT_TRIGGER_FORM_STATE);
+  const [trigger, setTrigger] = useState(
+    rule ? triggerToFormState(rule) : (initialTrigger ?? DEFAULT_TRIGGER_FORM_STATE),
+  );
   const [items, setItems] = useState<PickedScheduleItem[]>(
     rule?.items.map((item) => ({
       key: crypto.randomUUID(),
@@ -27,7 +53,9 @@ export function ScheduleRuleModal({ rule, onClose }: { rule?: ScheduleRuleDTO; o
       title: item.title,
       artist: item.artist,
       durationMs: item.durationMs,
-    })) ?? [],
+    })) ??
+      initialItems ??
+      [],
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -51,7 +79,7 @@ export function ScheduleRuleModal({ rule, onClose }: { rule?: ScheduleRuleDTO; o
     setError(null);
 
     if (items.length === 0) {
-      setError("Add at least one song, jingle, or ad to this rule.");
+      setError("Add at least one song, jingle, ad, or voice track to this rule.");
       return;
     }
 

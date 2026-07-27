@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DndContext, DragOverlay, closestCenter } from "@dnd-kit/core";
@@ -25,6 +25,8 @@ import { buildUpNextList, type UpNextDisplayEntry } from "../lib/queueTiming";
 import { useQueueReorder } from "../lib/useQueueReorder";
 import { formatDuration, formatTimeOfDay } from "../lib/format";
 import { useTimeFormat } from "../lib/useTimeFormat";
+import { useAudioInputDevices, type AudioInputDevice } from "../lib/useAudioInputDevices";
+import { LiveMicBroadcast } from "../lib/liveMicBroadcast";
 import { ProgressBar } from "../components/ProgressBar";
 import { MediaKindBadge } from "../components/MediaKindBadge";
 import { QuickAddSection } from "../components/QuickAddSection";
@@ -36,6 +38,8 @@ const UPCOMING_TRIGGERS_KEY = ["queue", "upcoming-triggers"];
 const JINGLES_KEY = ["library", "jingles"];
 const SCRATCH_PAD_KEY = ["settings", "scratch-pad"];
 const UP_NEXT_WINDOW_MS = 60 * 60 * 1000;
+const DEFAULT_MUSIC_VOLUME = 0.3; // matches the encoder mixer's own default duck target
+const MUSIC_VOLUME_DEBOUNCE_MS = 300;
 
 interface CurrentJingle {
   jingleId: string;
@@ -123,17 +127,64 @@ export function DashboardPage() {
     onError: (err) => setActionError(describeError(err, "change mode")),
   });
 
+  const { devices: micDevices } = useAudioInputDevices();
+  const [micDeviceId, setMicDeviceId] = useState<string | undefined>(undefined);
+  const [micVolume, setMicVolume] = useState(1);
+  const [musicVolume, setMusicVolume] = useState(DEFAULT_MUSIC_VOLUME);
+  const musicVolumeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const broadcastRef = useRef<LiveMicBroadcast | null>(null);
+
   const [liveMicSession, setLiveMicSession] = useState<LiveMicSessionDTO | null>(null);
-  const startLiveMicMutation = useMutation({
-    mutationFn: () => apiClient.post<LiveMicSessionDTO>("/live-mic/session"),
-    onSuccess: (session) => setLiveMicSession(session),
-    onError: (err) => setActionError(describeError(err, "go on air")),
-  });
   const stopLiveMicMutation = useMutation({
     mutationFn: (sessionId: string) => apiClient.post(`/live-mic/session/${sessionId}/stop`),
     onSuccess: () => setLiveMicSession(null),
     onError: (err) => setActionError(describeError(err, "stop the live mic")),
   });
+  const startLiveMicMutation = useMutation({
+    mutationFn: () => apiClient.post<LiveMicSessionDTO>("/live-mic/session"),
+    onSuccess: async (session) => {
+      const broadcast = new LiveMicBroadcast();
+      try {
+        await broadcast.start({ deviceId: micDeviceId, volume: micVolume, wsUrl: session.wsUrl });
+        broadcast.onClose(() => {
+          if (broadcastRef.current === broadcast) {
+            broadcastRef.current = null;
+            setLiveMicSession(null);
+          }
+        });
+        broadcastRef.current = broadcast;
+        setLiveMicSession(session);
+      } catch (err) {
+        setActionError(describeError(err, "capture the microphone"));
+        stopLiveMicMutation.mutate(session.sessionId);
+      }
+    },
+    onError: (err) => setActionError(describeError(err, "go on air")),
+  });
+
+  function stopBroadcast(): void {
+    broadcastRef.current?.stop();
+    broadcastRef.current = null;
+  }
+
+  // Tears down the mic capture if the component unmounts while on air (e.g. manager
+  // navigates away without clicking "off air" first).
+  useEffect(() => stopBroadcast, []);
+
+  function handleMicVolumeChange(volume: number): void {
+    setMicVolume(volume);
+    broadcastRef.current?.setVolume(volume);
+  }
+
+  function handleMusicVolumeChange(volume: number): void {
+    setMusicVolume(volume);
+    if (musicVolumeDebounceRef.current) clearTimeout(musicVolumeDebounceRef.current);
+    musicVolumeDebounceRef.current = setTimeout(() => {
+      apiClient.post("/live-mic/music-volume", { volume }).catch(() => {
+        setActionError("Couldn't update the music volume.");
+      });
+    }, MUSIC_VOLUME_DEBOUNCE_MS);
+  }
 
   const [jingleError, setJingleError] = useState<string | null>(null);
   const playJingleMutation = useMutation({
@@ -185,9 +236,21 @@ export function DashboardPage() {
             onSetMode={(mode) => modeMutation.mutate(mode)}
             isOnAir={liveMicSession !== null}
             liveMicBusy={startLiveMicMutation.isPending || stopLiveMicMutation.isPending}
-            onToggleLiveMic={() =>
-              liveMicSession ? stopLiveMicMutation.mutate(liveMicSession.sessionId) : startLiveMicMutation.mutate()
-            }
+            onToggleLiveMic={() => {
+              if (liveMicSession) {
+                stopBroadcast();
+                stopLiveMicMutation.mutate(liveMicSession.sessionId);
+              } else {
+                startLiveMicMutation.mutate();
+              }
+            }}
+            micDevices={micDevices}
+            micDeviceId={micDeviceId}
+            onMicDeviceChange={setMicDeviceId}
+            micVolume={micVolume}
+            onMicVolumeChange={handleMicVolumeChange}
+            musicVolume={musicVolume}
+            onMusicVolumeChange={handleMusicVolumeChange}
           />
           <ScratchPadSection
             scratchPad={scratchPadQuery.data}
@@ -436,6 +499,13 @@ function StatusSection({
   isOnAir,
   liveMicBusy,
   onToggleLiveMic,
+  micDevices,
+  micDeviceId,
+  onMicDeviceChange,
+  micVolume,
+  onMicVolumeChange,
+  musicVolume,
+  onMusicVolumeChange,
 }: {
   nowPlaying: NowPlayingDTO | undefined;
   actionError: string | null;
@@ -444,6 +514,13 @@ function StatusSection({
   isOnAir: boolean;
   liveMicBusy: boolean;
   onToggleLiveMic: () => void;
+  micDevices: AudioInputDevice[];
+  micDeviceId: string | undefined;
+  onMicDeviceChange: (deviceId: string) => void;
+  micVolume: number;
+  onMicVolumeChange: (volume: number) => void;
+  musicVolume: number;
+  onMusicVolumeChange: (volume: number) => void;
 }) {
   // MANUAL is a deliberate operator choice, not a playback state -- it stays
   // "MANUAL" even while paused on silence between tracks (that's the whole
@@ -489,6 +566,53 @@ function StatusSection({
           <MicIcon />
           {isOnAir ? "ON AIR" : "off air"}
         </button>
+      </div>
+
+      <div className="mt-4 flex flex-col gap-3">
+        <label className="flex items-center gap-3 text-sm text-slate-600">
+          <span className="w-28 shrink-0 font-medium text-slate-500">Microphone</span>
+          <select
+            value={micDeviceId ?? ""}
+            onChange={(e) => onMicDeviceChange(e.target.value)}
+            className="min-w-0 flex-1 rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+          >
+            <option value="">System default</option>
+            {micDevices.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex items-center gap-3 text-sm text-slate-600">
+          <span className="w-28 shrink-0 font-medium text-slate-500">Mic volume</span>
+          <input
+            type="range"
+            min={0}
+            max={2}
+            step={0.05}
+            value={micVolume}
+            onChange={(e) => onMicVolumeChange(Number(e.target.value))}
+            className="min-w-0 flex-1"
+          />
+          <span className="w-10 shrink-0 text-right tabular-nums text-slate-400">{Math.round(micVolume * 100)}%</span>
+        </label>
+
+        <label className="flex items-center gap-3 text-sm text-slate-600">
+          <span className="w-28 shrink-0 font-medium text-slate-500">Music volume</span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={musicVolume}
+            onChange={(e) => onMusicVolumeChange(Number(e.target.value))}
+            className="min-w-0 flex-1"
+          />
+          <span className="w-10 shrink-0 text-right tabular-nums text-slate-400">{Math.round(musicVolume * 100)}%</span>
+        </label>
+        <p className="text-xs text-slate-400">While the mic is on air, background music fades to this volume.</p>
       </div>
 
       {actionError && (

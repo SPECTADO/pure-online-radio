@@ -14,6 +14,7 @@ import { adsRoutes } from "./modules/library/ads.routes.js";
 import { categoriesRoutes } from "./modules/library/categories.routes.js";
 import { jinglesRoutes } from "./modules/library/jingles.routes.js";
 import { songsRoutes } from "./modules/library/songs.routes.js";
+import { voiceTracksRoutes } from "./modules/library/voiceTracks.routes.js";
 import { liveMicRoutes } from "./modules/liveMic/liveMic.routes.js";
 import { publicRoutes } from "./modules/public/public.routes.js";
 import { queueRoutes } from "./modules/queue/queue.routes.js";
@@ -71,6 +72,7 @@ export function createApp(): Express {
   app.use("/library/songs", songsRoutes);
   app.use("/library/jingles", jinglesRoutes);
   app.use("/library/ads", adsRoutes);
+  app.use("/library/voice-tracks", voiceTracksRoutes);
   app.use("/queue", queueRoutes);
   app.use("/schedule", scheduleRoutes);
   app.use("/clock-wheels", clockWheelsRoutes);

@@ -56,6 +56,7 @@ export const StorageStatsSchema = z.object({
   songs: StorageKindStatsSchema,
   jingles: StorageKindStatsSchema,
   ads: StorageKindStatsSchema,
+  voiceTracks: StorageKindStatsSchema,
 });
 export type StorageStatsDTO = z.infer<typeof StorageStatsSchema>;
 

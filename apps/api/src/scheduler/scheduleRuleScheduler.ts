@@ -59,6 +59,7 @@ async function fireScheduleRule(rule: RuleWithItems, now: Date): Promise<void> {
           songId: item.songId,
           jingleId: item.jingleId,
           adId: item.adId,
+          voiceTrackId: item.voiceTrackId,
           status: "PENDING",
           scheduleRuleId: rule.id,
           createdById: rule.createdById,

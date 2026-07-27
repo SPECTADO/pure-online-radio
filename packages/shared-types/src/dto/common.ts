@@ -3,7 +3,7 @@ import { z } from "zod";
 export const RoleSchema = z.enum(["MANAGER", "ADMIN"]);
 export type Role = z.infer<typeof RoleSchema>;
 
-export const MediaKindSchema = z.enum(["SONG", "JINGLE", "AD"]);
+export const MediaKindSchema = z.enum(["SONG", "JINGLE", "AD", "VOICE_TRACK"]);
 export type MediaKind = z.infer<typeof MediaKindSchema>;
 
 export const SelectionStrategySchema = z.enum(["RANDOM", "LEAST_RECENTLY_PLAYED", "WEIGHTED_RECENCY"]);

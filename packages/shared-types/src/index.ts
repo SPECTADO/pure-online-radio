@@ -5,6 +5,7 @@ export * from "./dto/batch.js";
 export * from "./dto/song.js";
 export * from "./dto/jingle.js";
 export * from "./dto/ad.js";
+export * from "./dto/voice-track.js";
 export * from "./dto/metadata-search.js";
 export * from "./dto/queue-entry.js";
 export * from "./dto/upcoming-trigger.js";

@@ -11,7 +11,7 @@ export const scheduleRoutes = Router();
 scheduleRoutes.use(requireAuth, requireRole("MANAGER", "ADMIN"));
 
 const ruleInclude = {
-  items: { orderBy: { order: "asc" }, include: { song: true, jingle: true, ad: true } },
+  items: { orderBy: { order: "asc" }, include: { song: true, jingle: true, ad: true, voiceTrack: true } },
 } satisfies Prisma.ScheduleRuleInclude;
 
 type RuleWithItems = Prisma.ScheduleRuleGetPayload<{ include: typeof ruleInclude }>;
@@ -23,15 +23,15 @@ function toScheduleRuleDTO(rule: RuleWithItems) {
     isActive: rule.isActive,
     lastTriggeredAt: rule.lastTriggeredAt?.toISOString() ?? null,
     items: rule.items.map((item) => {
-      const media = item.song ?? item.jingle ?? item.ad;
+      const media = item.song ?? item.jingle ?? item.ad ?? item.voiceTrack;
       if (!media) {
-        throw new Error(`ScheduleRuleItem ${item.id} has no song/jingle/ad attached`);
+        throw new Error(`ScheduleRuleItem ${item.id} has no song/jingle/ad/voiceTrack attached`);
       }
       return {
         id: item.id,
         order: item.order,
         mediaKind: item.mediaKind,
-        mediaId: item.songId ?? item.jingleId ?? item.adId ?? "",
+        mediaId: item.songId ?? item.jingleId ?? item.adId ?? item.voiceTrackId ?? "",
         title: media.title,
         artist: item.song?.artist ?? null,
         durationMs: media.durationMs,
@@ -69,7 +69,7 @@ scheduleRoutes.get("/:id", async (req, res) => {
 /** Validates every item's media exists and is active; returns the first validation error
  * response (already sent) or null if everything checked out. */
 async function validateItems(
-  items: { mediaKind: "SONG" | "JINGLE" | "AD"; mediaId: string }[],
+  items: { mediaKind: "SONG" | "JINGLE" | "AD" | "VOICE_TRACK"; mediaId: string }[],
   res: import("express").Response,
 ): Promise<boolean> {
   for (const item of items) {
@@ -109,6 +109,7 @@ scheduleRoutes.post("/", async (req, res) => {
           songId: item.mediaKind === "SONG" ? item.mediaId : undefined,
           jingleId: item.mediaKind === "JINGLE" ? item.mediaId : undefined,
           adId: item.mediaKind === "AD" ? item.mediaId : undefined,
+          voiceTrackId: item.mediaKind === "VOICE_TRACK" ? item.mediaId : undefined,
         })),
       },
     },

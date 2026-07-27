@@ -19,6 +19,7 @@ enum MediaKind {
   SONG
   JINGLE
   AD
+  VOICE_TRACK
 }
 
 enum SelectionStrategy {
@@ -88,6 +89,7 @@ enum PlaybackMediaKind {
   AD
   EXTERNAL_STREAM
   LIVE_MIC
+  VOICE_TRACK
 }
 
 enum StreamCodec {
@@ -110,6 +112,7 @@ model User {
   createdSongs           Song[]                @relation("SongCreatedBy")
   createdJingles         Jingle[]               @relation("JingleCreatedBy")
   createdAds             Ad[]                  @relation("AdCreatedBy")
+  createdVoiceTracks     VoiceTrack[]           @relation("VoiceTrackCreatedBy")
   createdScheduledItems   ScheduledItem[]
   createdScheduleRules    ScheduleRule[]
   createdExternalStreams  ExternalStream[]
@@ -223,6 +226,32 @@ model Ad {
   @@index([activeFrom, activeUntil])
 }
 
+// ── Voice tracks ──────────────────────────────────────────────────────────
+// A manager's own mic recording (record -> trim/cut in the browser -> title -> schedule),
+// a distinct media kind from Jingle: no categories/tags/type, since voice tracks are one-off
+// scheduled recordings, never part of clock-wheel rotation or category browsing (see
+// ClockWheelStepPicker.tsx/QuickAddSection.tsx, which both hardcode their own SONG/JINGLE/AD
+// option lists rather than enumerating MediaKind, so VOICE_TRACK never leaks in there).
+
+model VoiceTrack {
+  id            String   @id @default(cuid())
+  title         String
+  durationMs    Int
+  fileKey       String   @unique
+  fileMimeType  String
+  fileSizeBytes Int
+  isActive      Boolean  @default(true)
+  stationId     String?
+  createdById   String?
+  createdBy     User?    @relation("VoiceTrackCreatedBy", fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  scheduledItems    ScheduledItem[]
+  scheduleRuleItems ScheduleRuleItem[]
+  playbackHistory   PlaybackHistoryEntry[]
+}
+
 // ── One-off scheduled items ──────────────────────────────────────────────
 
 model ScheduledItem {
@@ -239,6 +268,8 @@ model ScheduledItem {
   jingle       Jingle?             @relation(fields: [jingleId], references: [id])
   adId         String?
   ad           Ad?                 @relation(fields: [adId], references: [id])
+  voiceTrackId String?
+  voiceTrack   VoiceTrack?         @relation(fields: [voiceTrackId], references: [id])
   status       ScheduledItemStatus @default(PENDING)
   // Non-null when this row was materialized by a ScheduleRule firing (as opposed to a
   // manager manually queuing/one-off-scheduling an item) -- traceability only, doesn't
@@ -372,8 +403,10 @@ model ScheduleRuleItem {
   jingle         Jingle?      @relation(fields: [jingleId], references: [id])
   adId           String?
   ad             Ad?          @relation(fields: [adId], references: [id])
-  // NOTE: same "exactly one of songId/jingleId/adId set, matching mediaKind" constraint
-  // as ScheduledItem -- enforced in the application layer (zod), not the schema.
+  voiceTrackId   String?
+  voiceTrack     VoiceTrack?  @relation(fields: [voiceTrackId], references: [id])
+  // NOTE: same "exactly one of songId/jingleId/adId/voiceTrackId set, matching mediaKind"
+  // constraint as ScheduledItem -- enforced in the application layer (zod), not the schema.
 
   @@unique([scheduleRuleId, order])
 }
@@ -506,6 +539,8 @@ model PlaybackHistoryEntry {
   jingle           Jingle?           @relation(fields: [jingleId], references: [id])
   adId             String?
   ad               Ad?               @relation(fields: [adId], references: [id])
+  voiceTrackId     String?
+  voiceTrack       VoiceTrack?       @relation(fields: [voiceTrackId], references: [id])
   externalStreamId String?
   externalStream   ExternalStream?   @relation(fields: [externalStreamId], references: [id])
   source           PlaybackSource

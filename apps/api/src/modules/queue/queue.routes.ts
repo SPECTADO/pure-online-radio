@@ -29,6 +29,7 @@ export const queueEntryInclude = {
   song: true,
   jingle: true,
   ad: true,
+  voiceTrack: true,
   scheduleRule: { select: { name: true } },
   clockWheelStep: { select: { clockWheel: { select: { name: true } } } },
 } satisfies Prisma.ScheduledItemInclude;
@@ -36,14 +37,14 @@ export const queueEntryInclude = {
 export type QueueEntryWithIncludes = Prisma.ScheduledItemGetPayload<{ include: typeof queueEntryInclude }>;
 
 export function toQueueEntryDTO(item: QueueEntryWithIncludes): QueueEntryDTO {
-  const media = item.song ?? item.jingle ?? item.ad;
+  const media = item.song ?? item.jingle ?? item.ad ?? item.voiceTrack;
   if (!media) {
-    throw new Error(`ScheduledItem ${item.id} has no song/jingle/ad attached`);
+    throw new Error(`ScheduledItem ${item.id} has no song/jingle/ad/voiceTrack attached`);
   }
   return {
     id: item.id,
     mediaKind: item.mediaKind,
-    mediaId: item.songId ?? item.jingleId ?? item.adId ?? "",
+    mediaId: item.songId ?? item.jingleId ?? item.adId ?? item.voiceTrackId ?? "",
     title: media.title,
     artist: item.song?.artist ?? null,
     durationMs: media.durationMs,
@@ -183,6 +184,7 @@ queueRoutes.post("/items", async (req, res) => {
       songId: mediaKind === "SONG" ? mediaId : undefined,
       jingleId: mediaKind === "JINGLE" ? mediaId : undefined,
       adId: mediaKind === "AD" ? mediaId : undefined,
+      voiceTrackId: mediaKind === "VOICE_TRACK" ? mediaId : undefined,
       status: "PENDING",
       createdById: req.user!.id,
     },

@@ -30,6 +30,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/library/songs", label: "Songs Library" },
       { to: "/library/jingles", label: "Jingles Library" },
       { to: "/library/ads", label: "Ads Library" },
+      { to: "/library/voice-tracks", label: "Voice Track" },
       { to: "/library/categories", label: "Categories" },
     ],
   },

@@ -20,15 +20,21 @@ export const internalRoutes = Router();
 
 internalRoutes.use(internalOnly);
 
-const claimInclude = { song: true, jingle: true, ad: true } satisfies Prisma.ScheduledItemInclude;
+const claimInclude = {
+  song: true,
+  jingle: true,
+  ad: true,
+  voiceTrack: true,
+} satisfies Prisma.ScheduledItemInclude;
 type ClaimedItem = Prisma.ScheduledItemGetPayload<{ include: typeof claimInclude }>;
 
 const TRACK_URL_BUFFER_SECONDS = 120;
 
-const PLAYBACK_MEDIA_KIND: Record<ClaimedItem["mediaKind"], "SONG" | "JINGLE" | "AD"> = {
+const PLAYBACK_MEDIA_KIND: Record<ClaimedItem["mediaKind"], "SONG" | "JINGLE" | "AD" | "VOICE_TRACK"> = {
   SONG: "SONG",
   JINGLE: "JINGLE",
   AD: "AD",
+  VOICE_TRACK: "VOICE_TRACK",
 };
 
 /**
@@ -75,9 +81,9 @@ async function claimNextQueueItem(): Promise<ClaimedItem | null> {
     if (!next) return null;
 
     const now = new Date();
-    const media = next.song ?? next.jingle ?? next.ad;
+    const media = next.song ?? next.jingle ?? next.ad ?? next.voiceTrack;
     if (!media) {
-      throw new Error(`ScheduledItem ${next.id} has no song/jingle/ad attached`);
+      throw new Error(`ScheduledItem ${next.id} has no song/jingle/ad/voiceTrack attached`);
     }
 
     await tx.scheduledItem.update({
@@ -96,6 +102,7 @@ async function claimNextQueueItem(): Promise<ClaimedItem | null> {
         songId: next.songId,
         jingleId: next.jingleId,
         adId: next.adId,
+        voiceTrackId: next.voiceTrackId,
         source: next.clockWheelStepId ? "CLOCK_WHEEL" : next.scheduleRuleId ? "SCHEDULED_ITEM" : "MANUAL",
         clockWheelStepId: next.clockWheelStepId,
         scheduledItemId: next.id,
@@ -112,9 +119,9 @@ async function claimNextQueueItem(): Promise<ClaimedItem | null> {
 }
 
 async function toTrackDirective(item: ClaimedItem): Promise<TrackDirectiveDTO> {
-  const media = item.song ?? item.jingle ?? item.ad;
+  const media = item.song ?? item.jingle ?? item.ad ?? item.voiceTrack;
   if (!media) {
-    throw new Error(`ScheduledItem ${item.id} has no song/jingle/ad attached`);
+    throw new Error(`ScheduledItem ${item.id} has no song/jingle/ad/voiceTrack attached`);
   }
 
   const ttlSeconds = Math.ceil(media.durationMs / 1000) + TRACK_URL_BUFFER_SECONDS;
@@ -140,7 +147,7 @@ async function toTrackDirective(item: ClaimedItem): Promise<TrackDirectiveDTO> {
     type: "track",
     requestId: randomUUID(),
     mediaKind: item.mediaKind,
-    mediaId: item.songId ?? item.jingleId ?? item.adId ?? "",
+    mediaId: item.songId ?? item.jingleId ?? item.adId ?? item.voiceTrackId ?? "",
     title: media.title,
     artist: item.song?.artist ?? null,
     // Only songs carry cover art in the schema -- streamed (not a direct

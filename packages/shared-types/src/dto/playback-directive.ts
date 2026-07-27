@@ -8,19 +8,19 @@ import { z } from "zod";
 export const TrackDirectiveSchema = z.object({
   type: z.literal("track"),
   requestId: z.string(), // idempotency key: retries of the same requestId must not double-consume state
-  mediaKind: z.enum(["SONG", "JINGLE", "AD"]),
+  mediaKind: z.enum(["SONG", "JINGLE", "AD", "VOICE_TRACK"]),
   mediaId: z.string(),
   title: z.string(),
   artist: z.string().nullable(),
   // API-relative path (e.g. "/library/songs/{id}/cover-art"), same convention
-  // as SongDTO.coverArtUrl -- null for jingles/ads, which have no cover art.
+  // as SongDTO.coverArtUrl -- null for jingles/ads/voice tracks, which have no cover art.
   coverArtUrl: z.string().nullable(),
   durationMs: z.number().int().positive(),
   url: z.string().url(),
   urlExpiresAt: z.string().datetime(),
   // Already-resolved (defaults applied, clamped to durationMs -- see
-  // resolveMixPoints) crossfade points. Null for JINGLE/AD: only SONG-to-SONG
-  // transitions crossfade, see QueueController.beginCrossfade.
+  // resolveMixPoints) crossfade points. Null for JINGLE/AD/VOICE_TRACK: only
+  // SONG-to-SONG transitions crossfade, see QueueController.beginCrossfade.
   mixInPointMs: z.number().int().nonnegative().nullable(),
   mixInDurationMs: z.number().int().nonnegative().nullable(),
   mixOutPointMs: z.number().int().nonnegative().nullable(),

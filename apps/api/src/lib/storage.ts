@@ -66,6 +66,7 @@ export interface StorageStats {
   songs: StorageKindStats;
   jingles: StorageKindStats;
   ads: StorageKindStats;
+  voiceTracks: StorageKindStats;
 }
 
 function emptyKindStats(): StorageKindStats {
@@ -80,10 +81,11 @@ function emptyKindStats(): StorageKindStats {
  * orphaned objects), not a derived sum of the DB's fileSizeBytes columns.
  */
 export async function getStorageStats(): Promise<StorageStats> {
-  const byKind: Record<"songs" | "jingles" | "ads", StorageKindStats> = {
+  const byKind: Record<"songs" | "jingles" | "ads" | "voiceTracks", StorageKindStats> = {
     songs: emptyKindStats(),
     jingles: emptyKindStats(),
     ads: emptyKindStats(),
+    voiceTracks: emptyKindStats(),
   };
   let totalBytes = 0;
   let totalObjectCount = 0;
@@ -105,7 +107,9 @@ export async function getStorageStats(): Promise<StorageStats> {
           ? "jingles"
           : object.Key?.startsWith("ads/")
             ? "ads"
-            : null;
+            : object.Key?.startsWith("voiceTracks/")
+              ? "voiceTracks"
+              : null;
       if (kind) {
         byKind[kind].objectCount += 1;
         byKind[kind].totalBytes += size;
@@ -184,6 +188,10 @@ export function jingleAudioKey(jingleId: string, ext: string): string {
 
 export function adAudioKey(adId: string, ext: string): string {
   return `ads/${adId}/original${ext}`;
+}
+
+export function voiceTrackAudioKey(voiceTrackId: string, ext: string): string {
+  return `voiceTracks/${voiceTrackId}/original${ext}`;
 }
 
 /** Singleton, unlike the per-item keys above -- there's only ever one station logo. */

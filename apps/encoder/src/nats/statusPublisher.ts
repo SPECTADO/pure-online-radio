@@ -8,6 +8,8 @@ import {
   JingleEndedStatusSchema,
   RelayStartedStatusSchema,
   RelayEndedStatusSchema,
+  LiveStartedStatusSchema,
+  LiveEndedStatusSchema,
   type HeartbeatStatus,
   type ErrorStatus,
   type NowPlayingStatus,
@@ -16,6 +18,8 @@ import {
   type JingleEndedStatus,
   type RelayStartedStatus,
   type RelayEndedStatus,
+  type LiveStartedStatus,
+  type LiveEndedStatus,
 } from "@spectado/shared-types";
 import type { NatsClient } from "./natsClient.js";
 import type { HealthMonitor } from "../health/healthMonitor.js";
@@ -46,7 +50,7 @@ export class StatusPublisher {
       activeSlots: {
         primary: this.mixer.primarySlotKind,
         jingle: this.mixer.jingleActive,
-        mic: false,
+        mic: this.mixer.micActive,
       },
       mixerUnderruns: this.mixer.underrunCount,
       hlsWriterHealthy: this.healthMonitor.isMasterEncoderHealthy(),
@@ -104,6 +108,18 @@ export class StatusPublisher {
     const validated = RelayEndedStatusSchema.parse(status);
     this.natsClient.publish(NATS_SUBJECTS.encoderStatus.relayEnded, validated);
     this.logger.debug({ status: validated }, "published relay ended");
+  }
+
+  publishLiveStarted(status: LiveStartedStatus): void {
+    const validated = LiveStartedStatusSchema.parse(status);
+    this.natsClient.publish(NATS_SUBJECTS.encoderStatus.liveStarted, validated);
+    this.logger.debug({ status: validated }, "published live started");
+  }
+
+  publishLiveEnded(status: LiveEndedStatus): void {
+    const validated = LiveEndedStatusSchema.parse(status);
+    this.natsClient.publish(NATS_SUBJECTS.encoderStatus.liveEnded, validated);
+    this.logger.debug({ status: validated }, "published live ended");
   }
 
   /** Starts the heartbeat interval and returns the timer so callers can clear it on shutdown. */

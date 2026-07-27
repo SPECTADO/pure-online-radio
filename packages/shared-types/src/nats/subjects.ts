@@ -17,6 +17,7 @@ export const NATS_SUBJECTS = {
     jingleStop: "radio.encoder.cmd.jingle.stop",
     liveStart: "radio.encoder.cmd.live.start",
     liveStop: "radio.encoder.cmd.live.stop",
+    liveMusicVolume: "radio.encoder.cmd.live.musicVolume",
     relayStart: "radio.encoder.cmd.relay.start",
     relayStop: "radio.encoder.cmd.relay.stop",
     relayCancel: "radio.encoder.cmd.relay.cancel",

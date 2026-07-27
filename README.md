@@ -8,9 +8,11 @@ queue, jingles, live mic input, and external stream relays. Everything runs as a
 > are real and verified working end-to-end (see [Implementation status](#implementation-status)). The manual
 > playback queue, standalone jingle overlay, the Schedule/External Streams feature (recurring/one-off
 > song-jingle-ad blocks and relay triggers, real scheduler + NATS commands, and a real encoder-side relay decode with
-> reconnect/backoff and fallback-to-queue), and Clock Wheels (automatic queue filling from day/time rotation rules,
-> with separation-rule enforcement) are now real too — what's left stubbed is live mic mixing. See that section
-> before assuming a feature works.
+> reconnect/backoff and fallback-to-queue), Clock Wheels (automatic queue filling from day/time rotation rules,
+> with separation-rule enforcement), **Live Mic** (real browser-mic-to-encoder broadcast with manager-adjustable
+> mic/music volume and auto-ducking), and **Voice Track** (record/edit/schedule a mic recording, reusing the
+> Schedule feature) are now real too — see that section for the exact current real-vs-stub breakdown before
+> assuming a feature works.
 
 ## Contents
 
@@ -510,7 +512,7 @@ Defined once in `packages/shared-types/src/nats/subjects.ts` and enforced at the
 
 | Namespace                | Publisher | Subscribers                    | Purpose                                                                                                   |
 | ------------------------ | --------- | ------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `radio.encoder.cmd.*`    | api       | encoder                        | Commands: advance/skip, set mode, play/stop jingle, start/stop live mic, start/stop/cancel external relay |
+| `radio.encoder.cmd.*`    | api       | encoder                        | Commands: advance/skip, set mode, play/stop jingle, start/stop live mic + set music-duck volume, start/stop/cancel external relay |
 | `radio.encoder.status.*` | encoder   | api, control-panel (read-only) | Telemetry: now-playing, queue-advanced, jingle/live/relay start-stop, errors, heartbeat, command acks     |
 | `radio.control.*`        | api       | control-panel (read-only)      | API-originated broadcasts not sourced from the encoder: mode confirmation, queue-updated signal, alerts   |
 
@@ -573,9 +575,8 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   panel), each triggering the same real jingle-overlay play as the quick search. Assignments are configured on the
   new Settings → Scratch Pad page and persist to a `ScratchPad` singleton row (`GET/PUT /settings/scratch-pad`,
   same findFirst-or-create pattern as `StationSettings`). The big OFF/AUTO/MANUAL pill is a real button (click to
-  toggle `POST /queue/mode`, disabled while OFF/silence); the ON AIR/off air pill calls the real (still-stubbed)
-  `POST /live-mic/session` endpoint and surfaces its 501 like any other not-yet-built action — there's no real
-  live-mic session to read until that feature (below) is built, so it always reads "off air" today.
+  toggle `POST /queue/mode`, disabled while OFF/silence); the ON AIR/off air pill is now a real, fully-wired live
+  mic broadcast -- see the **Live Mic** entry below.
 - **12h/24h clock format** — a station-wide display preference (`StationSettings.timeFormat`, Settings → Station
   Settings → Display), read via `useTimeFormat()` and applied everywhere a clock time is rendered (Dashboard,
   Queue, Schedule, Ads, External Streams, Separation Rules).
@@ -621,6 +622,38 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   grid of which wheel is active when (default wheel as the base fill color, specific wheels as colored blocks);
   the Queue/Dashboard "Up Next" views tag clock-wheel-filled rows "Rotation" to distinguish them from manual/
   scheduled items.
+- **Live Mic** — a real browser-mic-to-encoder broadcast, finishing the design the original scaffold's stub
+  comments already described. `POST /live-mic/session` mints a random per-session `sessionId`/`token`, publishes
+  `LiveStartCommand` (the encoder is the sole authority on validating a websocket connection's token/expiry — the
+  api only guards against two concurrent broadcasts, in-process, since it runs as a single instance), and returns a
+  `wsUrl` the browser connects to directly. The browser captures the picked device via `getUserMedia`, applies the
+  **mic volume** slider client-side via a `GainNode` before encoding (no encoder-side per-broadcaster gain control
+  needed at all), encodes to WebM/Opus via `MediaRecorder`, and streams chunks over that websocket.
+  `ws/liveMicServer.ts` correlates the connection to the session `LiveMicController` already authorized, and feeds
+  incoming chunks into `sources/micSource.ts` -- a real per-session ffmpeg decode process
+  (`-f webm -i pipe:0 -f f32le ... pipe:1`, fed over stdin) into the same ring-buffer/framing plumbing every other
+  decode source uses. `core/mixer.ts`'s new mic overlay slot sums the decoded audio onto the bus at unity gain
+  (already client-scaled) and continuously ramps the primary bus's gain toward a **music volume** target (the
+  Dashboard's own slider, `POST /live-mic/music-volume`, a station-wide `radio.encoder.cmd.live.musicVolume`
+  command) whenever a mic is mounted — a ~1s fade in both directions (duck in on connect, fade back to 100% on
+  disconnect), not an instant snap. An unsolicited socket close (dropped tab, network blip) unmounts and publishes
+  `liveEnded` exactly like an explicit stop, guarded the same idempotent way `RelayController.finishRelay` already
+  was for relays.
+- **Voice Track** (`VoiceTrack`, Library → Voice Track) — record a mic clip in the browser, edit it against a
+  visible waveform (`components/VoiceTrackEditor.tsx`, the same client-side-decoded Web Audio API canvas approach
+  as the Songs library's `WaveformEditor.tsx`, but destructive: drag-select a range to trim to it or ripple-delete
+  it, with an in-memory undo stack), title it, and upload the edited result (a small hand-rolled PCM16 WAV encoder,
+  `lib/wavEncoder.ts` — no new npm dependency) via `POST /library/voice-tracks`. Modeled as its own `VoiceTrack`
+  table and a new `MediaKind.VOICE_TRACK` value (not folded into `Jingle`) — `ScheduledItem`/`ScheduleRuleItem`/
+  `PlaybackHistoryEntry` each carry a nullable `voiceTrackId` alongside their existing `songId`/`jingleId`/`adId`
+  columns, and every `song ?? jingle ?? ad` media-resolution fallback across the scheduler, `GET
+  /internal/playback/next`, and the Schedule routes now also falls back to `voiceTrack`. Scheduling a recording for
+  playback **reuses the existing Schedule feature outright**: `ScheduleRuleModal` gained three optional prefill
+  props (`initialName`/`initialItems`/`initialTrigger`, backward-compatible — `SchedulePage`'s own calls are
+  unaffected) so the Voice Track page's "Schedule" button opens the exact same modal used elsewhere, pre-seeded
+  with a `ONE_TIME` trigger and the recording already added as an item; picking a datetime and saving creates a
+  real `ScheduleRule` the existing 15s scheduler tick fires like any other. Verified end-to-end against the running
+  dev stack: upload → schedule → scheduler fire → encoder claim/decode/playback → advance back to the queue.
 - **Stream Settings** (`StreamSettings`, Settings → Stream Settings) — codec (AAC/MP3), low/high variant bitrate,
   HLS segment length + segment count (the live-edge/time-shift/DVR window is `segmentSeconds × segmentCount`), and a
   **real** Low Latency HLS toggle. The encoder fetches this singleton row once at boot (`GET
@@ -687,12 +720,8 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   nothing since every LL-HLS-aware client (hls.js included, verified directly) already always uses Range requests
   for `.m4s` on its own.
 
-**Stubbed (real routes/modules exist, but return placeholder data or `501 Not Implemented`):**
-
-- Live mic mixing in the encoder (`apps/encoder/src/sources/micSource.ts`, `controllers/liveMicController.ts`) —
-  correct interfaces/state machine exist (mirroring the now-real `relaySource.ts`/`relayController.ts`), and
-  `LiveMicServer` accepts WebSocket connections, but doesn't yet decode/mix the mic input into the bus (jingle
-  playback and external relay are the two overlay/primary sources that are real now).
+**Stubbed:** nothing, as of this pass — live mic mixing (the last remaining stub) is now real; see the **Live Mic**
+and **Voice Track** entries above.
 
 ## Troubleshooting
 

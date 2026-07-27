@@ -4,6 +4,7 @@ const MEDIA_KIND_STYLES: Record<MediaKind, string> = {
   SONG: "bg-green-600 text-white",
   JINGLE: "bg-blue-600 text-white",
   AD: "bg-red-600 text-white",
+  VOICE_TRACK: "bg-purple-600 text-white",
 };
 
 export function MediaKindBadge({ kind }: { kind: MediaKind }) {

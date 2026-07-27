@@ -8,10 +8,14 @@ const wheelInclude = { slots: true, steps: true } satisfies Prisma.ClockWheelInc
 type WheelWithRelations = Prisma.ClockWheelGetPayload<{ include: typeof wheelInclude }>;
 type Step = WheelWithRelations["steps"][number];
 
-const PLAYBACK_MEDIA_KIND: Record<MediaKind, "SONG" | "JINGLE" | "AD"> = {
+const PLAYBACK_MEDIA_KIND: Record<MediaKind, "SONG" | "JINGLE" | "AD" | "VOICE_TRACK"> = {
   SONG: "SONG",
   JINGLE: "JINGLE",
   AD: "AD",
+  // Never actually produced for a clock-wheel step (the step-create UI only ever offers
+  // SONG/JINGLE/AD -- see ClockWheelStepPicker.tsx), but MediaKind is a shared enum so this
+  // Record must stay exhaustive over all 4 values to type-check.
+  VOICE_TRACK: "VOICE_TRACK",
 };
 
 /** First active, non-default wheel with a slot matching `at`, else the default wheel

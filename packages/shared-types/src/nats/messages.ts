@@ -48,6 +48,15 @@ export const LiveStopCommandSchema = z.object({
 });
 export type LiveStopCommand = z.infer<typeof LiveStopCommandSchema>;
 
+// Station-wide, not session-scoped -- sets the duck target the mixer ramps the primary
+// bus toward whenever a mic is live (core/mixer.ts). Takes effect immediately if a mic
+// session is already active, otherwise just updates the stored target for next time.
+export const LiveMusicVolumeCommandSchema = z.object({
+  commandId: z.string(),
+  volume: z.number().min(0).max(1),
+});
+export type LiveMusicVolumeCommand = z.infer<typeof LiveMusicVolumeCommandSchema>;
+
 export const RelayStartCommandSchema = z.object({
   commandId: z.string(),
   relayId: z.string(),
@@ -134,6 +143,18 @@ export const RelayEndedStatusSchema = z.object({
   reason: z.enum(["stopped", "failed"]).default("stopped"),
 });
 export type RelayEndedStatus = z.infer<typeof RelayEndedStatusSchema>;
+
+export const LiveStartedStatusSchema = z.object({
+  ts: z.string().datetime(),
+  sessionId: z.string(),
+});
+export type LiveStartedStatus = z.infer<typeof LiveStartedStatusSchema>;
+
+export const LiveEndedStatusSchema = z.object({
+  ts: z.string().datetime(),
+  sessionId: z.string(),
+});
+export type LiveEndedStatus = z.infer<typeof LiveEndedStatusSchema>;
 
 export const ErrorStatusSchema = z.object({
   ts: z.string().datetime(),

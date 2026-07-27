@@ -7,6 +7,7 @@ import {
   JingleStopCommandSchema,
   LiveStartCommandSchema,
   LiveStopCommandSchema,
+  LiveMusicVolumeCommandSchema,
   RelayStartCommandSchema,
   RelayStopCommandSchema,
   RelayCancelCommandSchema,
@@ -18,6 +19,7 @@ import type { NatsClient } from "./natsClient.js";
 import type { QueueController } from "../controllers/queueController.js";
 import type { JingleController } from "../controllers/jingleController.js";
 import type { RelayController } from "../controllers/relayController.js";
+import type { LiveMicController } from "../controllers/liveMicController.js";
 import type { Logger } from "../util/logger.js";
 
 interface CommandEntry {
@@ -37,6 +39,7 @@ const COMMAND_SCHEMAS: Record<string, CommandEntry> = {
   [NATS_SUBJECTS.cmd.jingleStop]: { name: "jingle.stop", schema: JingleStopCommandSchema },
   [NATS_SUBJECTS.cmd.liveStart]: { name: "live.start", schema: LiveStartCommandSchema },
   [NATS_SUBJECTS.cmd.liveStop]: { name: "live.stop", schema: LiveStopCommandSchema },
+  [NATS_SUBJECTS.cmd.liveMusicVolume]: { name: "live.musicVolume", schema: LiveMusicVolumeCommandSchema },
   [NATS_SUBJECTS.cmd.relayStart]: { name: "relay.start", schema: RelayStartCommandSchema },
   [NATS_SUBJECTS.cmd.relayStop]: { name: "relay.stop", schema: RelayStopCommandSchema },
   [NATS_SUBJECTS.cmd.relayCancel]: { name: "relay.cancel", schema: RelayCancelCommandSchema },
@@ -46,15 +49,15 @@ export interface CommandControllers {
   queueController: QueueController;
   jingleController: JingleController;
   relayController: RelayController;
+  liveMicController: LiveMicController;
 }
 
 /**
  * REAL: subscribes to every `radio.encoder.cmd.*` subject (via
  * NATS_WILDCARDS.cmd), validates each payload against its matching schema,
- * and dispatches `advance`/`setMode`/`jingle.play`/`jingle.stop`/`relay.*` to
- * the real queueController/jingleController/relayController. `live.*` keeps
- * the original pass's behavior (validate + ack `true`, no dispatch) -- mic
- * mixing is still untouched, out of scope here.
+ * and dispatches `advance`/`setMode`/`jingle.play`/`jingle.stop`/`relay.*`/
+ * `live.*` to the real queueController/jingleController/relayController/
+ * liveMicController.
  */
 export function startCommandRouter(natsClient: NatsClient, logger: Logger, controllers: CommandControllers): void {
   natsClient.subscribe(NATS_WILDCARDS.cmd, (subject, data) => {
@@ -110,8 +113,16 @@ async function dispatch(subject: string, data: unknown, controllers: CommandCont
     case NATS_SUBJECTS.cmd.relayCancel:
       await controllers.relayController.handleRelayCancel(data as z.infer<typeof RelayCancelCommandSchema>);
       return;
+    case NATS_SUBJECTS.cmd.liveStart:
+      await controllers.liveMicController.handleLiveStart(data as z.infer<typeof LiveStartCommandSchema>);
+      return;
+    case NATS_SUBJECTS.cmd.liveStop:
+      await controllers.liveMicController.handleLiveStop(data as z.infer<typeof LiveStopCommandSchema>);
+      return;
+    case NATS_SUBJECTS.cmd.liveMusicVolume:
+      controllers.liveMicController.handleSetMusicVolume(data as z.infer<typeof LiveMusicVolumeCommandSchema>);
+      return;
     default:
-      // live.*: untouched stub, no dispatch -- already ack'd above.
       return;
   }
 }

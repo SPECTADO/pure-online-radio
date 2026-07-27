@@ -15,6 +15,7 @@ import { ApiClient, DEFAULT_STREAM_SETTINGS } from "./api/apiClient.js";
 import { QueueController } from "./controllers/queueController.js";
 import { JingleController } from "./controllers/jingleController.js";
 import { RelayController } from "./controllers/relayController.js";
+import { LiveMicController } from "./controllers/liveMicController.js";
 import { LiveMicServer } from "./ws/liveMicServer.js";
 
 const BOOT_STREAM_SETTINGS_ATTEMPTS = 5;
@@ -80,11 +81,19 @@ async function main(): Promise<void> {
   const queueController = new QueueController(mixer, apiClient, statusPublisher, logger);
   const jingleController = new JingleController(mixer, statusPublisher, logger);
   const relayController = new RelayController(mixer, queueController, statusPublisher, logger);
-  startCommandRouter(natsClient, logger, { queueController, jingleController, relayController });
+
+  // --- live mic: websocket + controller reference each other, so the controller is
+  // constructed second and the server's callback closes over it (never invoked before
+  // both exist -- only on a real incoming socket event, well after this function returns). ---
+  let liveMicController: LiveMicController;
+  const liveMicServer = new LiveMicServer(config.liveMicWsPort, logger, (sessionId) =>
+    liveMicController.handleSocketClosed(sessionId),
+  );
+  liveMicController = new LiveMicController(mixer, liveMicServer, statusPublisher, logger);
+
+  startCommandRouter(natsClient, logger, { queueController, jingleController, relayController, liveMicController });
   queueController.start();
 
-  // --- live mic websocket (stub: accepts connections, doesn't decode/mix yet) ---
-  const liveMicServer = new LiveMicServer(config.liveMicWsPort, logger);
   liveMicServer.start();
 
   let shuttingDown = false;

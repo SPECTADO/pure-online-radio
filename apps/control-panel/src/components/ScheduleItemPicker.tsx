@@ -17,7 +17,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { AdDTO, JingleDTO, MediaKind, SongDTO } from "@spectado/shared-types";
+import type { AdDTO, JingleDTO, MediaKind, SongDTO, VoiceTrackDTO } from "@spectado/shared-types";
 import { apiClient } from "../lib/apiClient";
 import { formatDuration } from "../lib/format";
 import { MediaKindBadge } from "./MediaKindBadge";
@@ -61,6 +61,10 @@ export function ScheduleItemPicker({
     queryFn: () => apiClient.get<JingleDTO[]>("/library/jingles"),
   });
   const adsQuery = useQuery({ queryKey: ["library", "ads"], queryFn: () => apiClient.get<AdDTO[]>("/library/ads") });
+  const voiceTracksQuery = useQuery({
+    queryKey: ["library", "voice-tracks"],
+    queryFn: () => apiClient.get<VoiceTrackDTO[]>("/library/voice-tracks"),
+  });
 
   const results = useMemo<SearchResult[]>(() => {
     const q = search.trim().toLowerCase();
@@ -75,9 +79,12 @@ export function ScheduleItemPicker({
     const adResults: SearchResult[] = (adsQuery.data ?? [])
       .filter((a) => a.isActive && a.title.toLowerCase().includes(q))
       .map((a) => ({ mediaKind: "AD", id: a.id, title: a.title, subtitle: null, durationMs: a.durationMs }));
+    const voiceTrackResults: SearchResult[] = (voiceTracksQuery.data ?? [])
+      .filter((v) => v.isActive && v.title.toLowerCase().includes(q))
+      .map((v) => ({ mediaKind: "VOICE_TRACK", id: v.id, title: v.title, subtitle: null, durationMs: v.durationMs }));
 
-    return [...songResults, ...jingleResults, ...adResults].slice(0, MAX_SEARCH_RESULTS);
-  }, [songsQuery.data, jinglesQuery.data, adsQuery.data, search]);
+    return [...songResults, ...jingleResults, ...adResults, ...voiceTrackResults].slice(0, MAX_SEARCH_RESULTS);
+  }, [songsQuery.data, jinglesQuery.data, adsQuery.data, voiceTracksQuery.data, search]);
 
   function addResult(result: SearchResult) {
     onChange([
@@ -118,7 +125,7 @@ export function ScheduleItemPicker({
         type="text"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search songs, jingles, and ads by title…"
+        placeholder="Search songs, jingles, ads, and voice tracks by title…"
         className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
       />
 
@@ -153,7 +160,7 @@ export function ScheduleItemPicker({
       )}
 
       {items.length === 0 ? (
-        <p className="text-sm text-slate-500">No items yet -- search above to add songs, jingles, or ads.</p>
+        <p className="text-sm text-slate-500">No items yet -- search above to add songs, jingles, ads, or voice tracks.</p>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={items.map((i) => i.key)} strategy={verticalListSortingStrategy}>

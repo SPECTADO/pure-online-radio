@@ -5,6 +5,9 @@ import {
   AdvanceCommandSchema,
   JinglePlayCommandSchema,
   JingleStopCommandSchema,
+  LiveMusicVolumeCommandSchema,
+  LiveStartCommandSchema,
+  LiveStopCommandSchema,
   NATS_SUBJECTS,
   QueueUpdatedBroadcastSchema,
   RelayCancelCommandSchema,
@@ -14,6 +17,9 @@ import {
   type AdvanceCommand,
   type JinglePlayCommand,
   type JingleStopCommand,
+  type LiveMusicVolumeCommand,
+  type LiveStartCommand,
+  type LiveStopCommand,
   type PlaybackMode,
   type RelayCancelCommand,
   type RelayStartCommand,
@@ -96,6 +102,40 @@ export async function publishJingleStopCommand(params: {
 }): Promise<JingleStopCommand> {
   const command: JingleStopCommand = { commandId: randomUUID() };
   await auditAndPublish(NATS_SUBJECTS.cmd.jingleStop, JingleStopCommandSchema, command, params.userId);
+  return command;
+}
+
+export async function publishLiveStartCommand(params: {
+  sessionId: string;
+  token: string;
+  expiresAt: Date;
+  userId: string | null;
+}): Promise<LiveStartCommand> {
+  const command: LiveStartCommand = {
+    commandId: randomUUID(),
+    sessionId: params.sessionId,
+    token: params.token,
+    expiresAt: params.expiresAt.toISOString(),
+  };
+  await auditAndPublish(NATS_SUBJECTS.cmd.liveStart, LiveStartCommandSchema, command, params.userId);
+  return command;
+}
+
+export async function publishLiveStopCommand(params: {
+  sessionId: string;
+  userId: string | null;
+}): Promise<LiveStopCommand> {
+  const command: LiveStopCommand = { commandId: randomUUID(), sessionId: params.sessionId };
+  await auditAndPublish(NATS_SUBJECTS.cmd.liveStop, LiveStopCommandSchema, command, params.userId);
+  return command;
+}
+
+export async function publishLiveMusicVolumeCommand(params: {
+  volume: number;
+  userId: string | null;
+}): Promise<LiveMusicVolumeCommand> {
+  const command: LiveMusicVolumeCommand = { commandId: randomUUID(), volume: params.volume };
+  await auditAndPublish(NATS_SUBJECTS.cmd.liveMusicVolume, LiveMusicVolumeCommandSchema, command, params.userId);
   return command;
 }
 

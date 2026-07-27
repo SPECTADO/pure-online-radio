@@ -5,6 +5,7 @@ import { DashboardPage } from "./routes/DashboardPage";
 import { SongsLibraryPage } from "./routes/SongsLibraryPage";
 import { JinglesLibraryPage } from "./routes/JinglesLibraryPage";
 import { AdsLibraryPage } from "./routes/AdsLibraryPage";
+import { VoiceTrackPage } from "./routes/VoiceTrackPage";
 import { CategoriesPage } from "./routes/CategoriesPage";
 import { QueuePage } from "./routes/QueuePage";
 import { SchedulePage } from "./routes/SchedulePage";
@@ -29,6 +30,7 @@ export function App() {
           <Route path="library/songs" element={<SongsLibraryPage />} />
           <Route path="library/jingles" element={<JinglesLibraryPage />} />
           <Route path="library/ads" element={<AdsLibraryPage />} />
+          <Route path="library/voice-tracks" element={<VoiceTrackPage />} />
           <Route path="library/categories" element={<CategoriesPage />} />
           <Route path="queue" element={<QueuePage />} />
           <Route path="schedule" element={<SchedulePage />} />
