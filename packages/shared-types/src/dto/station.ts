@@ -36,6 +36,11 @@ export const StationSettingsSchema = z.object({
   // How far ahead the clock-wheel fill engine keeps the queue planned -- see
   // apps/api/src/scheduler/clockWheelEngine.ts.
   queuePlanningHorizonMinutes: z.number().int().positive(),
+  // Fallback crossfade lengths for songs that don't set their own mix-in/out
+  // duration -- see Song.mixInDurationMs/mixOutDurationMs and
+  // packages/shared-types/src/lib/mixPoints.ts.
+  defaultMixInDurationMs: z.number().int().nonnegative(),
+  defaultMixOutDurationMs: z.number().int().nonnegative(),
   updatedAt: z.string().datetime(),
 });
 export type StationSettingsDTO = z.infer<typeof StationSettingsSchema>;
@@ -47,5 +52,7 @@ export const UpdateStationSettingsRequestSchema = z.object({
   removeLogo: z.boolean().optional(),
   timeFormat: TimeFormatSchema.default("12h"),
   queuePlanningHorizonMinutes: z.coerce.number().int().positive().default(240),
+  defaultMixInDurationMs: z.coerce.number().int().nonnegative().default(5000),
+  defaultMixOutDurationMs: z.coerce.number().int().nonnegative().default(5000),
 });
 export type UpdateStationSettingsRequestDTO = z.infer<typeof UpdateStationSettingsRequestSchema>;

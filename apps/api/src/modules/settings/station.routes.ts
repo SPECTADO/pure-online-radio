@@ -18,8 +18,9 @@ stationRoutes.get("/", async (_req, res) => {
 
 // Genuinely partial: a field left out of the request body keeps its current
 // DB value rather than falling back to a hardcoded default. Needed because
-// the queue-planning horizon is edited from its own form on the Queue Rules
-// page, which only ever sends that one field -- not the full station form.
+// the queue-planning horizon and the crossfade defaults are each edited from
+// their own form on the Queue Rules page, which only ever sends that one
+// field -- not the full station form.
 stationRoutes.patch("/", stationLogoUpload, async (req, res) => {
   const existing = await ensureStationSettings();
 
@@ -32,6 +33,10 @@ stationRoutes.patch("/", stationLogoUpload, async (req, res) => {
     timeFormat: optionalStringField(req.body.timeFormat) ?? existing.timeFormat,
     queuePlanningHorizonMinutes:
       optionalStringField(req.body.queuePlanningHorizonMinutes) ?? String(existing.queuePlanningHorizonMinutes),
+    defaultMixInDurationMs:
+      optionalStringField(req.body.defaultMixInDurationMs) ?? String(existing.defaultMixInDurationMs),
+    defaultMixOutDurationMs:
+      optionalStringField(req.body.defaultMixOutDurationMs) ?? String(existing.defaultMixOutDurationMs),
   });
   if (!parsed.success) {
     res.status(400).json({ error: "invalid request", details: parsed.error.issues });
@@ -44,6 +49,8 @@ stationRoutes.patch("/", stationLogoUpload, async (req, res) => {
     links: parsed.data.links as Prisma.InputJsonValue,
     timeFormat: parsed.data.timeFormat,
     queuePlanningHorizonMinutes: parsed.data.queuePlanningHorizonMinutes,
+    defaultMixInDurationMs: parsed.data.defaultMixInDurationMs,
+    defaultMixOutDurationMs: parsed.data.defaultMixOutDurationMs,
   };
 
   const logoFile = req.file;

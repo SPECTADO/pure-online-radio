@@ -147,6 +147,14 @@ model Song {
   tags          String[]  @default([])
   isActive      Boolean   @default(true) // soft-disable, keeps history FKs intact
   stationId     String? // multi-station scaffold, unused in v1
+
+  // Crossfade points -- null means "use StationSettings.defaultMixInDurationMs
+  // / defaultMixOutDurationMs" (see packages/shared-types/src/lib/mixPoints.ts,
+  // the single place that resolves these against the durationMs above).
+  mixInPointMs    Int?
+  mixInDurationMs Int?
+  mixOutPointMs    Int?
+  mixOutDurationMs Int?
   createdById   String?
   createdBy     User?     @relation("SongCreatedBy", fields: [createdById], references: [id])
   createdAt     DateTime  @default(now())
@@ -404,6 +412,11 @@ model StationSettings {
   // How far ahead the clock-wheel fill engine keeps the queue planned -- see
   // apps/api/src/scheduler/clockWheelEngine.ts.
   queuePlanningHorizonMinutes Int @default(240)
+  // Fallback crossfade lengths for songs that don't set their own
+  // mixInDurationMs/mixOutDurationMs -- see Song model and
+  // packages/shared-types/src/lib/mixPoints.ts.
+  defaultMixInDurationMs  Int @default(5000)
+  defaultMixOutDurationMs Int @default(5000)
   updatedAt    DateTime @updatedAt
   updatedById  String?
   updatedBy    User?    @relation(fields: [updatedById], references: [id])

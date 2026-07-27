@@ -534,6 +534,20 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   currently in the queue. The control panel's Queue page (search + add + remove) and Dashboard (now-playing +
   up-next + jingle search/play/stop, each with a live mm:ss countdown and progress bar, poll + NATS-pushed) are both
   wired to this for real.
+- **Song-to-song crossfading** — each song carries optional `mixInPointMs`/`mixInDurationMs`/`mixOutPointMs`/
+  `mixOutDurationMs` (nullable; falls back to `StationSettings.defaultMixInDurationMs`/`defaultMixOutDurationMs`,
+  both 5s by default — resolved in one place, `packages/shared-types/src/lib/mixPoints.ts`, shared by the API's
+  directive-building and the control panel's editor preview so the two never drift). `QueueController.beginCrossfade`
+  (`apps/encoder/src/controllers/queueController.ts`) is the single entry point for every advance — a track's natural
+  end, an explicit skip, or the proactive timer fired at a song's own resolved mix-out point — and for two
+  consecutive SONG items (jingles/ads/relay are untouched, still a hard cut) it fetches the next track *before* the
+  current one ends and blends the two via a real `TransitionSource` (equal-power fade curves,
+  `apps/encoder/src/core/crossfadeEnvelope.ts`) instead of the silence gap a hard cut used to leave. Manual skip goes
+  through the same path (just triggered immediately instead of at the scheduled point), and a skip that interrupts an
+  already-fading transition nests it into the next crossfade rather than hard-cutting or leaking the outgoing ffmpeg
+  process. Editable per song from the Songs Library page (`SongEditModal` → `WaveformEditor`: a client-side-decoded,
+  Web Audio API canvas waveform with draggable mix-in/mix-out region handles and an audio preview scrubber); the two
+  station-wide defaults live on Settings → Queue Rules.
 - NATS command/status plumbing, heartbeat (now reporting the mixer's real primary-slot kind/jingle-active/underrun
   state instead of hardcoded placeholders), and the encoder's on-demand `GET /internal/playback/next` fetch (driven
   by the queue controller's advance loop, not a fixed-interval poll — that endpoint has a real dequeue side effect).

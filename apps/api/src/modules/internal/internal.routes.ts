@@ -4,6 +4,7 @@ import { Prisma, prisma } from "@spectado/database";
 import {
   PlaybackDirectiveSchema,
   StreamSettingsSchema,
+  resolveMixPoints,
   type PlaybackDirectiveDTO,
   type SilenceDirectiveDTO,
   type TrackDirectiveDTO,
@@ -13,6 +14,7 @@ import { getPresignedGetUrl } from "../../lib/storage.js";
 import { logger } from "../../logger.js";
 import { incrementSongPlayCountAndFire } from "../../scheduler/scheduleRuleScheduler.js";
 import { ensureStreamSettings, toStreamSettingsDTO } from "../settings/streamSettings.js";
+import { ensureStationSettings } from "../settings/stationSettings.js";
 
 export const internalRoutes = Router();
 
@@ -118,6 +120,22 @@ async function toTrackDirective(item: ClaimedItem): Promise<TrackDirectiveDTO> {
   const ttlSeconds = Math.ceil(media.durationMs / 1000) + TRACK_URL_BUFFER_SECONDS;
   const url = await getPresignedGetUrl(media.fileKey, ttlSeconds);
 
+  // Only songs crossfade (see QueueController.beginCrossfade) -- jingles/ads
+  // have their own hard-cut/ducking behavior, so they carry no mix points.
+  const mixPoints =
+    item.mediaKind === "SONG" && item.song
+      ? resolveMixPoints(
+          {
+            durationMs: item.song.durationMs,
+            mixInPointMs: item.song.mixInPointMs,
+            mixInDurationMs: item.song.mixInDurationMs,
+            mixOutPointMs: item.song.mixOutPointMs,
+            mixOutDurationMs: item.song.mixOutDurationMs,
+          },
+          await ensureStationSettings(),
+        )
+      : null;
+
   return {
     type: "track",
     requestId: randomUUID(),
@@ -131,6 +149,10 @@ async function toTrackDirective(item: ClaimedItem): Promise<TrackDirectiveDTO> {
     durationMs: media.durationMs,
     url,
     urlExpiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+    mixInPointMs: mixPoints?.mixInPointMs ?? null,
+    mixInDurationMs: mixPoints?.mixInDurationMs ?? null,
+    mixOutPointMs: mixPoints?.mixOutPointMs ?? null,
+    mixOutDurationMs: mixPoints?.mixOutDurationMs ?? null,
   };
 }
 

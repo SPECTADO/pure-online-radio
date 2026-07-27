@@ -96,6 +96,110 @@ function QueuePlanningSection() {
   );
 }
 
+function CrossfadeDefaultsSection() {
+  const timeFormat = useTimeFormat();
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: STATION_KEY,
+    queryFn: () => apiClient.get<StationSettingsDTO>("/settings/station"),
+  });
+
+  const [mixInSeconds, setMixInSeconds] = useState(5);
+  const [mixOutSeconds, setMixOutSeconds] = useState(5);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!query.data) return;
+    setMixInSeconds(query.data.defaultMixInDurationMs / 1000);
+    setMixOutSeconds(query.data.defaultMixOutDurationMs / 1000);
+  }, [query.data]);
+
+  const updateMutation = useMutation({
+    mutationFn: (payload: { defaultMixInDurationMs: number; defaultMixOutDurationMs: number }) =>
+      apiClient.patch<StationSettingsDTO>("/settings/station", {
+        defaultMixInDurationMs: String(payload.defaultMixInDurationMs),
+        defaultMixOutDurationMs: String(payload.defaultMixOutDurationMs),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: STATION_KEY });
+      showToast("success", "Crossfade defaults saved");
+    },
+    onError: (err) => {
+      const message = err instanceof ApiError ? err.message : "Update failed";
+      setError(message);
+      showToast("error", `Couldn't save crossfade defaults: ${message}`);
+    },
+  });
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    updateMutation.mutate({
+      defaultMixInDurationMs: Math.round(mixInSeconds * 1000),
+      defaultMixOutDurationMs: Math.round(mixOutSeconds * 1000),
+    });
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-6">
+      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-400">Crossfade Defaults</h2>
+      <p className="mb-4 text-xs text-slate-500">
+        How long consecutive songs blend into each other when a song doesn't set its own mix-in/mix-out points
+        (see the Mix Points section of a song's editor).
+      </p>
+
+      {query.isLoading && <p className="text-sm text-slate-500">Loading…</p>}
+      {query.isError && (
+        <div className="rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">
+          Couldn't load crossfade defaults: {(query.error as Error).message}
+        </div>
+      )}
+
+      {query.data && (
+        <form onSubmit={handleSubmit}>
+          <div className="grid grid-cols-2 gap-4">
+            <label>
+              <span className={labelClass}>Default mix-in (seconds)</span>
+              <input
+                type="number"
+                min={0}
+                step={0.5}
+                value={mixInSeconds}
+                onChange={(e) => setMixInSeconds(Number(e.target.value))}
+                className={inputClass}
+              />
+            </label>
+            <label>
+              <span className={labelClass}>Default mix-out (seconds)</span>
+              <input
+                type="number"
+                min={0}
+                step={0.5}
+                value={mixOutSeconds}
+                onChange={(e) => setMixOutSeconds(Number(e.target.value))}
+                className={inputClass}
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
+            <span className="text-xs text-slate-400">Last updated {formatDateTime(query.data.updatedAt, timeFormat)}</span>
+            <button
+              type="submit"
+              disabled={updateMutation.isPending}
+              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {updateMutation.isPending ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+
+          {error && <div className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        </form>
+      )}
+    </div>
+  );
+}
+
 function SeparationRulesSection() {
   const timeFormat = useTimeFormat();
   const queryClient = useQueryClient();
@@ -221,6 +325,7 @@ export function QueueRulesPage() {
 
       <div className="flex max-w-md flex-col gap-6">
         <QueuePlanningSection />
+        <CrossfadeDefaultsSection />
         <SeparationRulesSection />
       </div>
     </div>

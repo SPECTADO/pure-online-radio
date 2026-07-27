@@ -32,6 +32,9 @@ export class QueueSource extends EventEmitter implements Source {
   constructor(
     private readonly directive: TrackDirectiveDTO,
     private readonly logger: Logger,
+    /** Skips ahead into the file before decoding starts -- used to start a
+     * crossfade's incoming song at its resolved mixInPointMs instead of 0. */
+    startOffsetMs = 0,
   ) {
     super();
     this.ffmpeg = new FfmpegProcess(
@@ -46,6 +49,11 @@ export class QueueSource extends EventEmitter implements Source {
         // 10-100x real-time), which floods the ring buffer and drops nearly
         // the whole track before the mixer's 20ms tick can consume it.
         "-re",
+        // -ss BEFORE -i is an input seek (fast, keyframe-ish demuxer skip
+        // rather than decode-and-discard) -- must precede -i to take effect
+        // that way. Omitted entirely when there's nothing to skip, since a
+        // literal "-ss 0" is harmless but pointless noise in the ffmpeg args.
+        ...(startOffsetMs > 0 ? ["-ss", (startOffsetMs / 1000).toFixed(3)] : []),
         "-i",
         directive.url,
         "-f",

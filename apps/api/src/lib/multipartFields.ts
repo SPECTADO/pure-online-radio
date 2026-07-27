@@ -29,3 +29,18 @@ export function optionalStringField(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   return value.trim() === "" ? undefined : value;
 }
+
+/**
+ * Same "leave alone if absent" convention as optionalStringField, but for
+ * nullable numeric fields (e.g. Song.mixInPointMs) where the control panel
+ * needs a third state beyond "unset"/"a value": explicitly resetting the
+ * field back to null (e.g. "use the station default"). The literal string
+ * "null" is how the control panel spells that reset over multipart/form-data,
+ * which otherwise has no way to send a real `null`.
+ */
+export function optionalNumberField(value: unknown): number | null | undefined {
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  if (value === "null") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}

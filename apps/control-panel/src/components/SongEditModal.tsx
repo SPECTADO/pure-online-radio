@@ -1,10 +1,14 @@
 import { type FormEvent, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { MetadataSearchResultDTO, SongDTO } from "@spectado/shared-types";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { MetadataSearchResultDTO, SongDTO, StationSettingsDTO } from "@spectado/shared-types";
+import { resolveMixPoints } from "@spectado/shared-types";
 import { apiClient, apiUrl, ApiError } from "../lib/apiClient";
 import { showToast } from "../lib/toastStore";
 import { Modal } from "./Modal";
 import { CategoryPicker } from "./CategoryPicker";
+import { WaveformEditor } from "./WaveformEditor";
+
+const DEFAULT_MIX_DURATIONS_MS = { defaultMixInDurationMs: 5000, defaultMixOutDurationMs: 5000 };
 
 const inputClass =
   "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
@@ -26,6 +30,22 @@ export function SongEditModal({ song, onClose }: { song: SongDTO; onClose: () =>
   const [searchResults, setSearchResults] = useState<MetadataSearchResultDTO[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+
+  // null means "use the station default" -- see resolveMixPoints below.
+  const [mixInPointMs, setMixInPointMs] = useState(song.mixInPointMs);
+  const [mixInDurationMs, setMixInDurationMs] = useState(song.mixInDurationMs);
+  const [mixOutPointMs, setMixOutPointMs] = useState(song.mixOutPointMs);
+  const [mixOutDurationMs, setMixOutDurationMs] = useState(song.mixOutDurationMs);
+
+  const stationSettingsQuery = useQuery({
+    queryKey: ["settings", "station"],
+    queryFn: () => apiClient.get<StationSettingsDTO>("/settings/station"),
+  });
+  const mixDefaults = stationSettingsQuery.data ?? DEFAULT_MIX_DURATIONS_MS;
+  const resolvedMix = resolveMixPoints(
+    { durationMs: song.durationMs, mixInPointMs, mixInDurationMs, mixOutPointMs, mixOutDurationMs },
+    mixDefaults,
+  );
 
   const updateMutation = useMutation({
     mutationFn: (formData: FormData) => apiClient.patch(`/library/songs/${song.id}`, formData),
@@ -97,6 +117,10 @@ export function SongEditModal({ song, onClose }: { song: SongDTO; onClose: () =>
       ),
     );
     formData.set("isActive", String(isActive));
+    formData.set("mixInPointMs", mixInPointMs === null ? "null" : String(mixInPointMs));
+    formData.set("mixInDurationMs", mixInDurationMs === null ? "null" : String(mixInDurationMs));
+    formData.set("mixOutPointMs", mixOutPointMs === null ? "null" : String(mixOutPointMs));
+    formData.set("mixOutDurationMs", mixOutDurationMs === null ? "null" : String(mixOutDurationMs));
     if (newAudioFile) formData.set("file", newAudioFile);
     if (newCoverArt) {
       formData.set("coverArt", newCoverArt);
@@ -182,6 +206,110 @@ export function SongEditModal({ song, onClose }: { song: SongDTO; onClose: () =>
         <div>
           <span className={labelClass}>Categories</span>
           <CategoryPicker selectedIds={categoryIds} onChange={setCategoryIds} />
+        </div>
+
+        <div className="rounded-md border border-slate-200 p-3">
+          <span className="text-sm font-medium text-slate-700">Crossfade mix points</span>
+          <p className="mb-3 mt-1 text-xs text-slate-500">
+            Where this song fades in/out when transitioning to/from another song. Leave a pair unset to use the
+            station's default (currently {(mixDefaults.defaultMixInDurationMs / 1000).toFixed(1)}s in /{" "}
+            {(mixDefaults.defaultMixOutDurationMs / 1000).toFixed(1)}s out).
+          </p>
+
+          <WaveformEditor
+            songId={song.id}
+            durationMs={song.durationMs}
+            mixInPointMs={resolvedMix.mixInPointMs}
+            mixInDurationMs={resolvedMix.mixInDurationMs}
+            mixOutPointMs={resolvedMix.mixOutPointMs}
+            mixOutDurationMs={resolvedMix.mixOutDurationMs}
+            onMixInChange={(pointMs, durationMs) => {
+              setMixInPointMs(Math.round(pointMs));
+              setMixInDurationMs(Math.round(durationMs));
+            }}
+            onMixOutChange={(pointMs, durationMs) => {
+              setMixOutPointMs(Math.round(pointMs));
+              setMixOutDurationMs(Math.round(durationMs));
+            }}
+          />
+
+          <div className="mt-3 grid grid-cols-2 gap-4">
+            <div className="flex flex-col gap-2 rounded-md bg-blue-50/60 p-2">
+              <div className="grid grid-cols-2 gap-2">
+                <label>
+                  <span className="mb-1 block text-xs font-medium text-slate-600">Mix-in point (s)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    value={(resolvedMix.mixInPointMs / 1000).toFixed(1)}
+                    onChange={(e) => setMixInPointMs(Math.round(Number(e.target.value) * 1000))}
+                    className={inputClass}
+                  />
+                </label>
+                <label>
+                  <span className="mb-1 block text-xs font-medium text-slate-600">Mix-in duration (s)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    value={(resolvedMix.mixInDurationMs / 1000).toFixed(1)}
+                    onChange={(e) => setMixInDurationMs(Math.round(Number(e.target.value) * 1000))}
+                    className={inputClass}
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setMixInPointMs(null);
+                  setMixInDurationMs(null);
+                }}
+                disabled={mixInPointMs === null && mixInDurationMs === null}
+                className="self-start text-xs font-medium text-blue-700 underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
+              >
+                Reset mix-in to default
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-2 rounded-md bg-orange-50/60 p-2">
+              <div className="grid grid-cols-2 gap-2">
+                <label>
+                  <span className="mb-1 block text-xs font-medium text-slate-600">Mix-out point (s)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    value={(resolvedMix.mixOutPointMs / 1000).toFixed(1)}
+                    onChange={(e) => setMixOutPointMs(Math.round(Number(e.target.value) * 1000))}
+                    className={inputClass}
+                  />
+                </label>
+                <label>
+                  <span className="mb-1 block text-xs font-medium text-slate-600">Mix-out duration (s)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    value={(resolvedMix.mixOutDurationMs / 1000).toFixed(1)}
+                    onChange={(e) => setMixOutDurationMs(Math.round(Number(e.target.value) * 1000))}
+                    className={inputClass}
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setMixOutPointMs(null);
+                  setMixOutDurationMs(null);
+                }}
+                disabled={mixOutPointMs === null && mixOutDurationMs === null}
+                className="self-start text-xs font-medium text-orange-700 underline disabled:cursor-not-allowed disabled:text-slate-400 disabled:no-underline"
+              >
+                Reset mix-out to default
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">

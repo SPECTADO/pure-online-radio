@@ -35,6 +35,17 @@ export interface Source {
    * available (underrun / not implemented / waiting for data).
    */
   getFrame(): Float32Array | null;
+
+  /**
+   * Releases any real resources (a decode source's ffmpeg process, ...).
+   * Optional because not every Source holds resources (SilenceSource has
+   * none); TransitionSource cascades into both of the sources it wraps, which
+   * matters because one side of a crossfade can itself be a still-fading
+   * TransitionSource from an interrupted earlier crossfade (see
+   * QueueController.beginCrossfade) -- skipping the cascade would leak the
+   * ffmpeg process it still holds underneath.
+   */
+  destroy?(): void;
 }
 
 /**

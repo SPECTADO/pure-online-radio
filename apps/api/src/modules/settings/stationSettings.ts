@@ -16,6 +16,8 @@ export function toStationSettingsDTO(row: {
   links: unknown;
   timeFormat: string;
   queuePlanningHorizonMinutes: number;
+  defaultMixInDurationMs: number;
+  defaultMixOutDurationMs: number;
   updatedAt: Date;
 }): StationSettingsDTO {
   return {
@@ -25,6 +27,8 @@ export function toStationSettingsDTO(row: {
     links: (row.links as StationLinkDTO[] | null) ?? [],
     timeFormat: row.timeFormat === "24h" ? "24h" : "12h",
     queuePlanningHorizonMinutes: row.queuePlanningHorizonMinutes,
+    defaultMixInDurationMs: row.defaultMixInDurationMs,
+    defaultMixOutDurationMs: row.defaultMixOutDurationMs,
     updatedAt: row.updatedAt.toISOString(),
   };
 }

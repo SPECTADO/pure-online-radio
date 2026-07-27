@@ -18,6 +18,13 @@ export const TrackDirectiveSchema = z.object({
   durationMs: z.number().int().positive(),
   url: z.string().url(),
   urlExpiresAt: z.string().datetime(),
+  // Already-resolved (defaults applied, clamped to durationMs -- see
+  // resolveMixPoints) crossfade points. Null for JINGLE/AD: only SONG-to-SONG
+  // transitions crossfade, see QueueController.beginCrossfade.
+  mixInPointMs: z.number().int().nonnegative().nullable(),
+  mixInDurationMs: z.number().int().nonnegative().nullable(),
+  mixOutPointMs: z.number().int().nonnegative().nullable(),
+  mixOutDurationMs: z.number().int().nonnegative().nullable(),
 });
 export type TrackDirectiveDTO = z.infer<typeof TrackDirectiveSchema>;
 

@@ -17,7 +17,7 @@ import {
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { songUpload } from "../../middleware/upload.js";
 import { extractAudioMetadata } from "../../lib/audioMetadata.js";
-import { parseJsonArrayField, optionalStringField } from "../../lib/multipartFields.js";
+import { parseJsonArrayField, optionalStringField, optionalNumberField } from "../../lib/multipartFields.js";
 import {
   deleteObject,
   extensionFor,
@@ -63,6 +63,10 @@ function toSongDTO(song: SongWithIncludes): SongDTO {
     lastPlayedAt: song.playbackHistory[0]?.startedAt.toISOString() ?? null,
     playCount: song._count.playbackHistory,
     createdAt: song.createdAt.toISOString(),
+    mixInPointMs: song.mixInPointMs,
+    mixInDurationMs: song.mixInDurationMs,
+    mixOutPointMs: song.mixOutPointMs,
+    mixOutDurationMs: song.mixOutDurationMs,
   };
 }
 
@@ -282,6 +286,10 @@ songsRoutes.patch("/:id", songUpload, async (req: Request<{ id: string }>, res) 
     tags: req.body.tags === undefined ? undefined : parseJsonArrayField(req.body.tags),
     isActive: req.body.isActive === undefined ? undefined : req.body.isActive === "true",
     removeCoverArt: req.body.removeCoverArt === "true",
+    mixInPointMs: optionalNumberField(req.body.mixInPointMs),
+    mixInDurationMs: optionalNumberField(req.body.mixInDurationMs),
+    mixOutPointMs: optionalNumberField(req.body.mixOutPointMs),
+    mixOutDurationMs: optionalNumberField(req.body.mixOutDurationMs),
   });
   if (!parsed.success) {
     res.status(400).json({ error: "invalid request", details: parsed.error.issues });
@@ -294,6 +302,10 @@ songsRoutes.patch("/:id", songUpload, async (req: Request<{ id: string }>, res) 
   if (parsed.data.album !== undefined) data.album = parsed.data.album;
   if (parsed.data.tags !== undefined) data.tags = parsed.data.tags;
   if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
+  if (parsed.data.mixInPointMs !== undefined) data.mixInPointMs = parsed.data.mixInPointMs;
+  if (parsed.data.mixInDurationMs !== undefined) data.mixInDurationMs = parsed.data.mixInDurationMs;
+  if (parsed.data.mixOutPointMs !== undefined) data.mixOutPointMs = parsed.data.mixOutPointMs;
+  if (parsed.data.mixOutDurationMs !== undefined) data.mixOutDurationMs = parsed.data.mixOutDurationMs;
   if (parsed.data.categoryIds !== undefined) {
     const categoryIds = await resolveCategoryIds(parsed.data.categoryIds);
     data.categories = { set: categoryIds.map((categoryId) => ({ id: categoryId })) };
@@ -310,6 +322,21 @@ songsRoutes.patch("/:id", songUpload, async (req: Request<{ id: string }>, res) 
     data.fileMimeType = audioFile.mimetype;
     data.fileSizeBytes = audioFile.size;
     data.durationMs = id3.durationMs;
+  }
+
+  // Validated against whichever duration will actually be in effect after
+  // this update (a replaced audio file may shorten the track) -- must run
+  // after the id3 probe above, not against the parsed request in isolation.
+  const effectiveDurationMs = (data.durationMs as number | undefined) ?? existing.durationMs;
+  if (parsed.data.mixInPointMs != null && parsed.data.mixInPointMs >= effectiveDurationMs) {
+    if (newAudioKey) await deleteObject(newAudioKey).catch(() => {});
+    res.status(400).json({ error: "mixInPointMs must be less than the song's duration" });
+    return;
+  }
+  if (parsed.data.mixOutPointMs != null && parsed.data.mixOutPointMs >= effectiveDurationMs) {
+    if (newAudioKey) await deleteObject(newAudioKey).catch(() => {});
+    res.status(400).json({ error: "mixOutPointMs must be less than the song's duration" });
+    return;
   }
 
   const coverArtFile = files?.coverArt?.[0];
