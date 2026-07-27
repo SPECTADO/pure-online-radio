@@ -3,6 +3,7 @@ import { Prisma, prisma } from "@spectado/database";
 import { QueueEntrySchema, ScheduleRuleSchema, UpsertScheduleRuleRequestSchema } from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { findActiveMedia } from "../../lib/media.js";
+import { logger } from "../../logger.js";
 import { triggerFromPrisma, triggerToPrismaData } from "../../lib/scheduleTrigger.js";
 import { queueEntryInclude, toQueueEntryDTO } from "../queue/queue.routes.js";
 
@@ -16,27 +17,38 @@ const ruleInclude = {
 
 type RuleWithItems = Prisma.ScheduleRuleGetPayload<{ include: typeof ruleInclude }>;
 
+/** Its underlying Song/Jingle/Ad/VoiceTrack can be deleted out from under a still-referenced
+ * ScheduleRuleItem (the FK is ON DELETE SET NULL, not a delete guard) -- an item like that is
+ * dropped from the rule's DTO (with a warning) rather than throwing and 500ing the whole list;
+ * the manager can still see/edit/delete the rule and just re-pick a replacement item. */
 function toScheduleRuleDTO(rule: RuleWithItems) {
+  const items = [];
+  for (const item of rule.items) {
+    const media = item.song ?? item.jingle ?? item.ad ?? item.voiceTrack;
+    if (!media) {
+      logger.warn(
+        { ruleId: rule.id, itemId: item.id },
+        "ScheduleRuleItem has no song/jingle/ad/voiceTrack attached (its media was likely deleted) -- omitting from response",
+      );
+      continue;
+    }
+    items.push({
+      id: item.id,
+      order: item.order,
+      mediaKind: item.mediaKind,
+      mediaId: item.songId ?? item.jingleId ?? item.adId ?? item.voiceTrackId ?? "",
+      title: media.title,
+      artist: item.song?.artist ?? null,
+      durationMs: media.durationMs,
+    });
+  }
+
   return {
     id: rule.id,
     name: rule.name,
     isActive: rule.isActive,
     lastTriggeredAt: rule.lastTriggeredAt?.toISOString() ?? null,
-    items: rule.items.map((item) => {
-      const media = item.song ?? item.jingle ?? item.ad ?? item.voiceTrack;
-      if (!media) {
-        throw new Error(`ScheduleRuleItem ${item.id} has no song/jingle/ad/voiceTrack attached`);
-      }
-      return {
-        id: item.id,
-        order: item.order,
-        mediaKind: item.mediaKind,
-        mediaId: item.songId ?? item.jingleId ?? item.adId ?? item.voiceTrackId ?? "",
-        title: media.title,
-        artist: item.song?.artist ?? null,
-        durationMs: media.durationMs,
-      };
-    }),
+    items,
     ...triggerFromPrisma(rule),
   };
 }
@@ -150,6 +162,7 @@ scheduleRoutes.patch("/:id", async (req, res) => {
             songId: item.mediaKind === "SONG" ? item.mediaId : undefined,
             jingleId: item.mediaKind === "JINGLE" ? item.mediaId : undefined,
             adId: item.mediaKind === "AD" ? item.mediaId : undefined,
+            voiceTrackId: item.mediaKind === "VOICE_TRACK" ? item.mediaId : undefined,
           })),
         },
       },

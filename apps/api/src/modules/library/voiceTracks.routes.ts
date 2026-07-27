@@ -152,6 +152,31 @@ voiceTracksRoutes.delete("/:id", async (req, res) => {
     return;
   }
 
+  // The FK from ScheduleRuleItem/ScheduledItem is ON DELETE SET NULL, not a delete guard --
+  // without this check, deleting a still-scheduled recording leaves an orphaned item with no
+  // media attached (previously crashed GET /schedule outright; that's now handled defensively
+  // too, but blocking the delete here is the actually-correct fix for a still-referenced item).
+  const [ruleItem, scheduledItem] = await Promise.all([
+    prisma.scheduleRuleItem.findFirst({
+      where: { voiceTrackId: existing.id },
+      select: { scheduleRule: { select: { name: true } } },
+    }),
+    prisma.scheduledItem.findFirst({
+      where: { voiceTrackId: existing.id, status: "PENDING" },
+      select: { id: true },
+    }),
+  ]);
+  if (ruleItem) {
+    res.status(409).json({
+      error: `"${existing.title}" is still used by schedule rule "${ruleItem.scheduleRule.name}" -- remove it from that rule first`,
+    });
+    return;
+  }
+  if (scheduledItem) {
+    res.status(409).json({ error: `"${existing.title}" is still pending in the queue -- remove it first` });
+    return;
+  }
+
   await prisma.voiceTrack.delete({ where: { id: existing.id } });
   await deleteObject(existing.fileKey).catch(() => {});
   res.status(204).send();
