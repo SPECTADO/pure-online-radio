@@ -4,18 +4,65 @@ A self-hosted online radio platform: a manager control panel for running the sta
 automated ffmpeg-based encoder that produces a continuous multi-bitrate HLS stream from a scheduled/rotated song
 queue, jingles, live mic input, and external stream relays. Everything runs as a single Docker Compose stack.
 
-> **Status:** this repository is currently a **scaffold**. The full infrastructure, data model, and service wiring
-> are real and verified working end-to-end (see [Implementation status](#implementation-status)). The manual
-> playback queue, standalone jingle overlay, the Schedule/External Streams feature (recurring/one-off
-> song-jingle-ad blocks and relay triggers, real scheduler + NATS commands, and a real encoder-side relay decode with
-> reconnect/backoff and fallback-to-queue), Clock Wheels (automatic queue filling from day/time rotation rules,
-> with separation-rule enforcement), **Live Mic** (real browser-mic-to-encoder broadcast with manager-adjustable
-> mic/music volume and auto-ducking), and **Voice Track** (record/edit/schedule a mic recording, reusing the
-> Schedule feature) are now real too — see that section for the exact current real-vs-stub breakdown before
-> assuming a feature works.
+## Control panel
+
+The manager control panel (`apps/control-panel`) is where a station operator runs everything day to day: live
+on-air status and mic control, the resolved playback queue, the song/jingle/ad library, Schedule rules, Clock
+Wheels, and encoder/stream configuration.
+
+<table>
+<tr>
+<td width="50%">
+<img src="screenshots/dashboard.png" alt="Dashboard">
+<br><sub><b>Dashboard</b> — now playing, on-air/mic controls with auto-ducking volume, the upcoming queue, scratch pad jingle buttons, and quick-add search.</sub>
+</td>
+<td width="50%">
+<img src="screenshots/queue.png" alt="Queue">
+<br><sub><b>Queue</b> — the full resolved queue (scheduled, rotation, and manual items) with per-item removal and a live "planned till" horizon.</sub>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<img src="screenshots/library-songEdit.png" alt="Song editor">
+<br><sub><b>Library</b> — song metadata, tags/categories, and a waveform editor for per-track crossfade mix-in/mix-out points.</sub>
+</td>
+<td width="50%">
+<img src="screenshots/schedule-edit.png" alt="Schedule rule editor">
+<br><sub><b>Schedule</b> — recurring or one-off rules (day/time window, repeat interval, insertion timing) that fire an ordered list of songs/jingles/ads.</sub>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<img src="screenshots/clockWheels.png" alt="Clock Wheels">
+<br><sub><b>Clock Wheels</b> — a weekly grid showing which rotation wheel is active for each day/time slot.</sub>
+</td>
+<td width="50%">
+<img src="screenshots/clockWheels-edit.png" alt="Clock Wheel editor">
+<br><sub><b>Clock Wheel editor</b> — day/time windows plus ordered pick-rule steps (category/tag filter + selection strategy) that fill the rotation.</sub>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<img src="screenshots/settings-queueRules.png" alt="Queue Rules settings">
+<br><sub><b>Queue Rules</b> — planning horizon, default crossfade timing, and artist/album/song separation rules for rotation fill.</sub>
+</td>
+<td width="50%">
+<img src="screenshots/settings-streamSettings.png" alt="Stream Settings">
+<br><sub><b>Stream Settings</b> — encoder codec/bitrate, HLS segment length/count, and Low-Latency HLS toggle.</sub>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<img src="screenshots/systemStatus.png" alt="System Status">
+<br><sub><b>System Status</b> — per-component health and uptime, current queue depth, and library/storage breakdown.</sub>
+</td>
+<td width="50%"></td>
+</tr>
+</table>
 
 ## Contents
 
+- [Control panel](#control-panel)
 - [How it works](#how-it-works)
 - [Architecture](#architecture)
 - [Data model](#data-model)
