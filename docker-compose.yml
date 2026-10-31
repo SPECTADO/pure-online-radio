@@ -129,6 +129,7 @@ services:
       JWT_REFRESH_TTL: ${JWT_REFRESH_TTL}
       ENCODER_CALLBACK_TOKEN: ${ENCODER_CALLBACK_TOKEN}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
       # Not read by the API app itself — only so `docker compose exec api
       # pnpm --filter @spectado/database db:seed` (per the README) picks up
       # the real .env values instead of the seed script's hardcoded defaults.

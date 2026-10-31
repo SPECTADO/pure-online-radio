@@ -68,15 +68,23 @@ WORKDIR /workspace
 # manifests + packages/config's tsconfig bases + shared-types + itself) -
 # apps/api, apps/control-panel, apps/player, etc. are other engineers' work
 # in progress and irrelevant to this build.
-COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY packages/config/typescript ./packages/config/typescript
 COPY packages/shared-types ./packages/shared-types
 COPY apps/encoder ./apps/encoder
 
-# No root pnpm-lock.yaml is committed yet at this stage of the monorepo; once
-# one exists, prefer `pnpm install --frozen-lockfile` here for reproducible,
-# cacheable installs.
-RUN pnpm install --filter "@spectado/encoder..."
+# Installs from the committed root pnpm-lock.yaml, NOT a fresh resolve -- a
+# fresh resolve silently picks up whatever a caret range (e.g. the catalog's
+# `zod: ^4.4.3`) matches *today*. Hit for real: a clean image rebuild resolved
+# zod@4.6.7 while the host's lockfile-installed node_modules (which the dev
+# override bind-mounts in via ./packages, including
+# packages/shared-types/node_modules/zod -> .pnpm/zod@4.4.3/...) still pointed
+# at 4.4.3, a path that then didn't exist in the container -- the encoder
+# crashed at startup with ERR_MODULE_NOT_FOUND for 'zod'. Not
+# --frozen-lockfile: only a slice of the workspace is copied in, so the
+# lockfile's other importers are absent (same reason apps/api's Dockerfile
+# uses --frozen-lockfile=false); pnpm still reuses the lockfile's versions.
+RUN pnpm install --filter "@spectado/encoder..." --frozen-lockfile=false
 
 RUN pnpm --filter "@spectado/encoder" build
 

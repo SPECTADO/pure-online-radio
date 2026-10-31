@@ -7,6 +7,8 @@ interface AttachedSession {
   token: string;
   expiresAtMs: number;
   socket: WebSocket | null;
+  /** True once any socket has been accepted for this session -- see `hasConnected`. */
+  connected: boolean;
 }
 
 function toBuffer(data: RawData): Buffer {
@@ -39,7 +41,14 @@ export class LiveMicServer {
   /** Authorizes `sessionId`/`token` to carry audio for `source` -- this IS the "validate
    * token/expiresAt" authorization step; a socket presenting anything else is rejected. */
   attachSession(sessionId: string, source: MicSource, token: string, expiresAtMs: number): void {
-    this.sessions.set(sessionId, { source, token, expiresAtMs, socket: null });
+    this.sessions.set(sessionId, { source, token, expiresAtMs, socket: null, connected: false });
+  }
+
+  /** Whether the browser has ever connected for `sessionId` -- LiveMicController uses this to end
+   * a session whose browser never shows up (closed the tab mid-setup, mic permission dialog
+   * abandoned, wrong URL), which would otherwise keep the music ducked for the token's whole TTL. */
+  hasConnected(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.connected ?? false;
   }
 
   /** Revokes a session and closes its socket if one is currently connected -- called on
@@ -68,7 +77,16 @@ export class LiveMicServer {
         return;
       }
 
+      // One socket per session: the decode ffmpeg is reading one continuous container stream, and
+      // a second connection would splice a fresh container header into the middle of it.
+      if (session.socket) {
+        this.logger.warn({ sessionId, remoteAddress }, "live-mic websocket rejected: session already has a connected socket");
+        socket.close(4009, "session already connected");
+        return;
+      }
+
       session.socket = socket;
+      session.connected = true;
       this.logger.info({ sessionId, remoteAddress }, "live-mic websocket connected");
 
       socket.on("message", (data: RawData, isBinary: boolean) => {

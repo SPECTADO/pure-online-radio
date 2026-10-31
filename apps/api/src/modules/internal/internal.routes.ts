@@ -29,6 +29,7 @@ const claimInclude = {
 type ClaimedItem = Prisma.ScheduledItemGetPayload<{ include: typeof claimInclude }>;
 
 const TRACK_URL_BUFFER_SECONDS = 120;
+const MAX_ORPHANS_CANCELLED_PER_CLAIM = 20;
 
 const PLAYBACK_MEDIA_KIND: Record<ClaimedItem["mediaKind"], "SONG" | "JINGLE" | "AD" | "VOICE_TRACK"> = {
   SONG: "SONG",
@@ -57,35 +58,48 @@ const PLAYBACK_MEDIA_KIND: Record<ClaimedItem["mediaKind"], "SONG" | "JINGLE" | 
  * gating on it here would risk a real silence gap the moment actual playback
  * runs ahead of the plan.
  */
+async function findClaimCandidate(tx: Prisma.TransactionClient): Promise<ClaimedItem | null> {
+  const due = await tx.scheduledItem.findFirst({
+    where: { status: "PENDING", scheduledFor: { lte: new Date() }, clockWheelStepId: null },
+    orderBy: [{ scheduledFor: "asc" }, { position: "asc" }],
+    include: claimInclude,
+  });
+  const manual =
+    due ??
+    (await tx.scheduledItem.findFirst({
+      where: { status: "PENDING", scheduledFor: null },
+      orderBy: { position: "asc" },
+      include: claimInclude,
+    }));
+  return (
+    manual ??
+    (await tx.scheduledItem.findFirst({
+      where: { status: "PENDING", clockWheelStepId: { not: null } },
+      orderBy: { position: "asc" },
+      include: claimInclude,
+    }))
+  );
+}
+
 async function claimNextQueueItem(): Promise<ClaimedItem | null> {
   return prisma.$transaction(async (tx) => {
-    const due = await tx.scheduledItem.findFirst({
-      where: { status: "PENDING", scheduledFor: { lte: new Date() }, clockWheelStepId: null },
-      orderBy: [{ scheduledFor: "asc" }, { position: "asc" }],
-      include: claimInclude,
-    });
-    const manual =
-      due ??
-      (await tx.scheduledItem.findFirst({
-        where: { status: "PENDING", scheduledFor: null },
-        orderBy: { position: "asc" },
-        include: claimInclude,
-      }));
-    const next =
-      manual ??
-      (await tx.scheduledItem.findFirst({
-        where: { status: "PENDING", clockWheelStepId: { not: null } },
-        orderBy: { position: "asc" },
-        include: claimInclude,
-      }));
-    if (!next) return null;
+    let next = await findClaimCandidate(tx);
+    let media = next && (next.song ?? next.jingle ?? next.ad ?? next.voiceTrack);
+    // A media-less row (its Song/Jingle/Ad/VoiceTrack was deleted out from under it -- the FK is
+    // ON DELETE SET NULL) must not be thrown on: that rolls back and leaves it PENDING as the queue
+    // head forever (permanent dead air). Cancel it and move on to the next candidate instead.
+    // Bounded so a pile of orphans can't blow the interactive-transaction timeout -- past the cap
+    // the encoder just gets silence and retries, which cancels the next batch.
+    for (let cancelled = 0; next && !media; cancelled++) {
+      logger.warn({ scheduledItemId: next.id }, "queue item has no media attached (deleted?) -- cancelling it");
+      await tx.scheduledItem.update({ where: { id: next.id }, data: { status: "CANCELLED" } });
+      if (cancelled + 1 >= MAX_ORPHANS_CANCELLED_PER_CLAIM) return null;
+      next = await findClaimCandidate(tx);
+      media = next && (next.song ?? next.jingle ?? next.ad ?? next.voiceTrack);
+    }
+    if (!next || !media) return null;
 
     const now = new Date();
-    const media = next.song ?? next.jingle ?? next.ad ?? next.voiceTrack;
-    if (!media) {
-      throw new Error(`ScheduledItem ${next.id} has no song/jingle/ad/voiceTrack attached`);
-    }
-
     await tx.scheduledItem.update({
       where: { id: next.id },
       data: { status: "PLAYED", playedAt: now },

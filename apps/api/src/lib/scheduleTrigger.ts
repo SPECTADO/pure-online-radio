@@ -55,3 +55,30 @@ export function triggerFromPrisma(row: PrismaTriggerFields): ScheduleTriggerDTO 
     everyNPlays: row.everyNPlays,
   };
 }
+
+const TRIGGER_TIMING_KEYS = [
+  "triggerType",
+  "runAt",
+  "weekdays",
+  "timeOfDay",
+  "intervalMinutes",
+  "windowStart",
+  "windowEnd",
+  "everyNPlays",
+] as const satisfies readonly (keyof ScheduleTriggerDTO)[];
+
+/** Bookkeeping to spread into a PATCH when the trigger's timing actually changed: restarts the
+ * play counter, and re-arms a ONE_TIME trigger (it's only ever due while `lastTriggeredAt` is
+ * null -- without this, an already-fired one-time rule/stream edited to a new runAt silently
+ * never fires again). WEEKLY/INTERVAL keep `lastTriggeredAt`: their catch-up is bounded by
+ * MAX_TRIGGER_CATCH_UP_MS, and clearing it could re-fire an occurrence that just played. */
+export function triggerBookkeepingOnEdit(existing: PrismaTriggerFields, next: ScheduleTriggerDTO) {
+  const before = triggerFromPrisma(existing);
+  const after = triggerFromPrisma(triggerToPrismaData(next));
+  const changed = TRIGGER_TIMING_KEYS.some((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
+  if (!changed) return {};
+  return {
+    playsSinceLastTrigger: 0,
+    ...(after.triggerType === "ONE_TIME" ? { lastTriggeredAt: null } : {}),
+  };
+}

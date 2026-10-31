@@ -12,6 +12,7 @@ import {
 import { Modal } from "./Modal";
 import { ScheduleTriggerFields } from "./ScheduleTriggerFields";
 import { ScheduleItemPicker, type PickedScheduleItem } from "./ScheduleItemPicker";
+import { newId } from "../lib/id";
 
 const inputClass =
   "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
@@ -47,7 +48,7 @@ export function ScheduleRuleModal({
   );
   const [items, setItems] = useState<PickedScheduleItem[]>(
     rule?.items.map((item) => ({
-      key: crypto.randomUUID(),
+      key: newId(),
       mediaKind: item.mediaKind,
       mediaId: item.mediaId,
       title: item.title,

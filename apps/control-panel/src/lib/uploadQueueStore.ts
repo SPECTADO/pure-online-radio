@@ -3,6 +3,7 @@ import type { QueryKey } from "@tanstack/react-query";
 import { queryClient } from "./queryClient";
 import { showToast } from "./toastStore";
 import { uploadWithProgress } from "./uploadXhr";
+import { newId } from "./id";
 
 export type UploadStatus = "queued" | "uploading" | "done" | "error";
 
@@ -84,7 +85,7 @@ export const useUploadQueueStore = create<UploadQueueState>((set, get) => {
     items: [],
 
     enqueue: (input) => {
-      const id = crypto.randomUUID();
+      const id = newId();
       set((state) => ({
         items: [...state.items, { ...input, id, status: "queued", progress: 0 }],
       }));

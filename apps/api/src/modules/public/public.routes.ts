@@ -5,6 +5,7 @@ import { publicRateLimit } from "../../middleware/rateLimit.js";
 import { getObjectStream } from "../../lib/storage.js";
 import { getNowPlaying } from "../nowPlaying/nowPlayingCache.js";
 import { ensureStationSettings, toStationSettingsDTO } from "../settings/stationSettings.js";
+import { pipeObjectToResponse } from "../../lib/streamAudioResponse.js";
 
 export const publicRoutes = Router();
 
@@ -44,5 +45,5 @@ publicRoutes.get("/station/logo", async (_req, res) => {
   const { body, contentType } = await getObjectStream(settings.logoKey);
   res.setHeader("Content-Type", contentType);
   res.setHeader("Cache-Control", "public, max-age=300");
-  body.pipe(res);
+  await pipeObjectToResponse(body, res);
 });

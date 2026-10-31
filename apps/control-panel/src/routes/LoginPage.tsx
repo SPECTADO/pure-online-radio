@@ -24,7 +24,8 @@ export function LoginPage() {
     setError(null);
     try {
       await login(username, password);
-      navigate("/", { replace: true });
+      // Back to the deep link ProtectedRoute bounced us from, not always the Dashboard.
+      navigate((location.state as { from?: Location })?.from?.pathname ?? "/", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {

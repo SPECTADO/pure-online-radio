@@ -1,4 +1,5 @@
 import type { ScheduleTriggerType } from "@spectado/shared-types";
+import { MAX_TRIGGER_CATCH_UP_MS } from "./constants.js";
 
 /** The scalar trigger fields shared by ScheduleRule and ExternalStream (see schema.prisma).
  * `timeOfDay`/`windowStart`/`windowEnd` are Prisma `@db.Time()` values -- plain Postgres TIME,
@@ -33,7 +34,8 @@ function instantAtDayOffset(now: Date, dayOffset: number, minutes: number): Date
 /**
  * Due-check for the 3 time-based trigger types (ONE_TIME/WEEKLY/INTERVAL). PLAY_COUNT is
  * event-driven (see scheduleRuleScheduler.incrementSongPlayCountAndFire), not tick-based,
- * so it's not handled here -- always returns false for it.
+ * so it's not handled here -- always returns false for it. WEEKLY/INTERVAL occurrences more
+ * than MAX_TRIGGER_CATCH_UP_MS in the past are never due (see that constant for why).
  */
 export function isTimeTriggerDue(trigger: TimeTrigger, now: Date): boolean {
   switch (trigger.triggerType) {
@@ -45,6 +47,7 @@ export function isTimeTriggerDue(trigger: TimeTrigger, now: Date): boolean {
       if (!trigger.weekdays.includes(now.getUTCDay())) return false;
       const todayInstant = instantAtUtcMinutes(now, utcMinutesSinceMidnight(trigger.timeOfDay));
       if (now < todayInstant) return false;
+      if (now.getTime() - todayInstant.getTime() > MAX_TRIGGER_CATCH_UP_MS) return false;
       return trigger.lastTriggeredAt === null || trigger.lastTriggeredAt < todayInstant;
     }
 
@@ -60,6 +63,7 @@ export function isTimeTriggerDue(trigger: TimeTrigger, now: Date): boolean {
       const bucketIndex = Math.floor((nowMin - windowStartMin) / trigger.intervalMinutes);
       const bucketInstant = instantAtUtcMinutes(now, windowStartMin + bucketIndex * trigger.intervalMinutes);
       if (now < bucketInstant) return false;
+      if (now.getTime() - bucketInstant.getTime() > MAX_TRIGGER_CATCH_UP_MS) return false;
       return trigger.lastTriggeredAt === null || trigger.lastTriggeredAt < bucketInstant;
     }
 

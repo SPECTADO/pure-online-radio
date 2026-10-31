@@ -21,6 +21,7 @@ import type { AdDTO, JingleDTO, MediaKind, SongDTO, VoiceTrackDTO } from "@spect
 import { apiClient } from "../lib/apiClient";
 import { formatDuration } from "../lib/format";
 import { MediaKindBadge } from "./MediaKindBadge";
+import { newId } from "../lib/id";
 
 const MAX_SEARCH_RESULTS = 10;
 
@@ -90,7 +91,7 @@ export function ScheduleItemPicker({
     onChange([
       ...items,
       {
-        key: crypto.randomUUID(),
+        key: newId(),
         mediaKind: result.mediaKind,
         mediaId: result.id,
         title: result.title,

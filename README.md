@@ -522,8 +522,10 @@ conveniences. Before deploying anywhere real:
 
 - Rotate every secret in `.env` (`.env.example` marks them all with `change-me` placeholders) — Postgres/Redis/MinIO
   passwords, the three NATS user passwords, `JWT_SECRET`, `ENCODER_CALLBACK_TOKEN`.
-- Set `PUBLIC_BASE_URL` to your real public origin (used both for cookie/CORS-adjacent behavior and to generate the
-  correct `ws(s)://` NATS URL handed to the control panel).
+- Set `PUBLIC_BASE_URL` to your real public origin (used to generate the `ws(s)://` NATS URL handed to the control
+  panel, and its scheme decides the auth cookies' `Secure` flag: `https://…` = Secure; override with
+  `COOKIE_SECURE=true|false`). `docker-compose.prod.yml` sets `NODE_ENV=production` for the api (info-level logs);
+  that no longer affects cookies, so it's safe on a plain-HTTP LAN deploy too.
 - TLS is optional and handled by `webserver` (Caddy) itself — no external load balancer/Certbot sidecar needed. Set
   `SITE_ADDRESS` in `.env` to your real public domain name (DNS pointed at this host, ports 80/443 reachable from the
   internet) and Caddy automatically provisions and renews a free Let's Encrypt certificate, redirecting HTTP to
@@ -546,9 +548,10 @@ All environment variables are documented in `.env.example`. Notable ones:
 | `API_NATS_PASSWORD` / `ENCODER_NATS_PASSWORD` / `CONTROL_PANEL_NATS_PASSWORD` | nats, api, encoder             | Per-role NATS credentials; permissions enforced server-side in `infra/docker/nats/nats-server.conf.template`                                                                               |
 | `ENCODER_CALLBACK_TOKEN`                                                      | api, encoder                   | Shared secret guarding `GET /internal/playback/next`                                                                                                                                       |
 | `JWT_SECRET`                                                                  | api                            | Signs the httpOnly access/refresh cookies issued on login                                                                                                                                  |
-| `PUBLIC_BASE_URL`                                                             | api, webserver                 | Public origin; drives the generated `env-config.js` and the NATS-ws URL handed to the control panel                                                                                        |
+| `PUBLIC_BASE_URL`                                                             | api                            | Public origin; drives the NATS-ws URL handed to the control panel and (by its scheme) the auth cookies' `Secure` flag. The SPAs' `env-config.js` is same-origin (`/api`) and no longer uses it |
+| `COOKIE_SECURE`                                                               | api                            | Optional `true`/`false` override for the auth cookies' `Secure` flag (default: follows `PUBLIC_BASE_URL`'s scheme)                                                                          |
 | `WEBSERVER_HOST_PORT`                                                         | webserver                      | Host port Caddy binds to for HTTP (default `80`) — change if that port is already taken locally                                                                                             |
-| `WEBSERVER_HTTPS_PORT`                                                        | webserver                      | Host port Caddy binds to for HTTPS (default `443`) — only matters when `SITE_ADDRESS` is set                                                                                                |
+| `WEBSERVER_HTTPS_PORT`                                                        | webserver                      | Host port Caddy binds to for HTTPS (default `443`) — only serves anything when `SITE_ADDRESS` is set, but is **always bound**, so it must be free (or changed, e.g. `8443`) locally too |
 | `SITE_ADDRESS`                                                                | webserver                      | Unset = plain HTTP on any hostname (local/LAN). A real public domain = automatic Let's Encrypt HTTPS for that domain. See Deployment                                                        |
 | `ACME_EMAIL`                                                                  | webserver                      | Optional Let's Encrypt contact email (expiry/renewal-problem notices); only relevant alongside `SITE_ADDRESS`                                                                               |
 
@@ -673,19 +676,34 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   comments already described. `POST /live-mic/session` mints a random per-session `sessionId`/`token`, publishes
   `LiveStartCommand` (the encoder is the sole authority on validating a websocket connection's token/expiry — the
   api only guards against two concurrent broadcasts, in-process, since it runs as a single instance), and returns a
-  `wsUrl` the browser connects to directly. The browser captures the picked device via `getUserMedia`, applies the
-  **mic volume** slider client-side via a `GainNode` before encoding (no encoder-side per-broadcaster gain control
-  needed at all), encodes to WebM/Opus via `MediaRecorder`, and streams chunks over that websocket.
-  `ws/liveMicServer.ts` correlates the connection to the session `LiveMicController` already authorized, and feeds
-  incoming chunks into `sources/micSource.ts` -- a real per-session ffmpeg decode process
-  (`-f webm -i pipe:0 -f f32le ... pipe:1`, fed over stdin) into the same ring-buffer/framing plumbing every other
-  decode source uses. `core/mixer.ts`'s new mic overlay slot sums the decoded audio onto the bus at unity gain
-  (already client-scaled) and continuously ramps the primary bus's gain toward a **music volume** target (the
-  Dashboard's own slider, `POST /live-mic/music-volume`, a station-wide `radio.encoder.cmd.live.musicVolume`
-  command) whenever a mic is mounted — a ~1s fade in both directions (duck in on connect, fade back to 100% on
-  disconnect), not an instant snap. An unsolicited socket close (dropped tab, network blip) unmounts and publishes
-  `liveEnded` exactly like an explicit stop, guarded the same idempotent way `RelayController.finishRelay` already
-  was for relays.
+  relative `wsPath` (`/live-mic/<sessionId>?token=…`) that the browser turns into a `ws(s)://` URL against **its own
+  page origin** (so it works from a LAN IP, a domain, HTTPS→`wss`, or the Vite dev server, which proxies `/live-mic`
+  too; the absolute, `PUBLIC_BASE_URL`-based `wsUrl` is still returned for compatibility but no longer used). The
+  browser captures the picked device via `getUserMedia` **with echo cancellation / noise suppression / auto gain
+  control turned off** (see Troubleshooting — the WebRTC voice processing defaults suppress steady signals and pump
+  against the music bed), applies the **mic volume** slider client-side via a `GainNode` before encoding (no
+  encoder-side per-broadcaster gain control needed at all), encodes with `MediaRecorder` (WebM/Opus where supported,
+  else Ogg/Opus or MP4 — first supported wins), and streams the chunks (as Blobs, preserving order) over that
+  websocket. Mic capture needs a secure context: the panel refuses to go on air — before creating a session — when
+  opened over plain `http://` from anything but `localhost`. `ws/liveMicServer.ts` correlates the connection to the
+  session `LiveMicController` already authorized (one socket per session), and feeds incoming chunks into
+  `sources/micSource.ts` -- a real per-session ffmpeg decode process (`-i pipe:0 -f f32le ... pipe:1`, container
+  autodetected, fed over stdin) into the same ring-buffer/framing plumbing every other decode source uses, behind an
+  **adaptive jitter buffer** (nothing is emitted until ~1s is buffered; each underrun re-buffers and raises the
+  target by 250ms, up to 3s; a backlog over 5s is trimmed back to the target so latency can't creep). That ~1s is
+  inaudible to listeners, who are already many seconds behind via HLS; ending a session **drains** it (the slot stays
+  mounted until the buffered audio has played) so the last words aren't cut off. `core/mixer.ts`'s mic overlay slot
+  sums the decoded audio onto the bus at unity gain (already client-scaled) and continuously ramps the primary bus's
+  gain toward a **music volume** target (the Dashboard's own slider, `POST /live-mic/music-volume`, a station-wide
+  `radio.encoder.cmd.live.musicVolume` command, re-sent by the Dashboard on every go-live since the encoder forgets
+  it on restart) whenever a mic is mounted — a ~1s fade in both directions (duck in on connect, fade back to 100% on
+  disconnect), not an instant snap. An unsolicited socket close (dropped tab, navigating away from the Dashboard,
+  network blip), a decode failure, or a browser that never connects within 60s ends the session exactly like an
+  explicit stop, guarded the same idempotent way `RelayController.finishRelay` already was for relays; every end
+  publishes `liveEnded`, which the api uses to release its one-broadcast guard (with the encoder heartbeat's
+  `activeSlots.mic` as a backstop for an encoder restart mid-broadcast). Verified end-to-end with a real Chrome
+  (fake-device mic playing a 1 kHz tone) driving the Dashboard's on-air button, measuring the tone and the music
+  bed in the recorded HLS output; Safari/Firefox capture paths are untested.
 - **Voice Track** (`VoiceTrack`, Library → Voice Track) — record a mic clip in the browser, edit it against a
   visible waveform (`components/VoiceTrackEditor.tsx`, the same client-side-decoded Web Audio API canvas approach
   as the Songs library's `WaveformEditor.tsx`, but destructive: drag-select a range to trim to it or ripple-delete
@@ -777,6 +795,58 @@ This scaffold prioritized getting real infrastructure wiring working end-to-end 
   nothing since every LL-HLS-aware client (hls.js included, verified directly) already always uses Range requests
   for `.m4s` on its own.
 
+- **Robustness / safety pass (review fixes)** — behavior worth knowing about, by area:
+  - *Library deletes.* `DELETE` (and songs' `batch-delete`) on a song/jingle/ad now returns **409** while it's still
+    used by a schedule rule or still PENDING in the manual/scheduled queue (same guard voice tracks already had —
+    the FKs are `ON DELETE SET NULL`, which used to leave a media-less queue row that 500'd every
+    `/internal/playback/next` = permanent dead air). PENDING clock-wheel rotation rows don't block the delete; they're
+    dropped in the same transaction and the fill engine refills the gap (`apps/api/src/lib/mediaReferences.ts`).
+    Defensively, `claimNextQueueItem` now **cancels** any media-less row it meets instead of throwing, the Queue/
+    Schedule lists omit such rows with a warning, and a firing rule skips items whose media is gone. Deleting a
+    category still filtered on by a clock-wheel step is also a 409 (null would silently mean "all categories").
+  - *Uploads.* Every MinIO key now carries a random per-upload token (`songs/{id}/original-<token>.mp3`, likewise
+    cover art, jingles, ads, voice tracks, the station logo), so replacing a file can never overwrite — and a failed
+    replace can never delete — the live object. A file whose duration can't be determined is rejected with **400**
+    before anything is stored (`music-metadata` now also scans the stream when headers lack a duration).
+  - *Triggers.* A WEEKLY/INTERVAL occurrence fires at most 5 minutes late (`MAX_TRIGGER_CATCH_UP_MS`) — a rule
+    created/re-timed after today's slot waits for the next one instead of interrupting the song on air hours late
+    (ONE_TIME still fires once when past due). Editing a fired ONE_TIME rule/stream's timing re-arms it. INTERVAL
+    windows must end after they start (overnight windows are rejected — they could never fire). **All
+    day/time-of-day fields (weekly/interval triggers, clock-wheel slots) are UTC wall-clock** — now labeled "UTC" in
+    the UI; there is no station timezone setting yet. External streams reject the `PLAY_COUNT` trigger (it was never
+    fired for them). A failed relay is terminal (`FAILED`) only for ONE_TIME streams; recurring ones go back to
+    `STOPPED` so the next occurrence still fires, and a `FAILED` stream is editable again (saving re-arms it). A relay
+    preempted by another relay now still reports `relay.ended`. Scheduler evaluators never overlap themselves, and an
+    active wheel with no eligible media stops the tick after one rotation instead of spinning to the 200-item cap.
+  - *Encoder.* The PCM FIFO is opened non-blocking: a stalled/restarting master ffmpeg now just drops frames
+    (rate-limited warning) instead of blocking the whole event loop forever in `write(2)`. Queue advances are
+    serialized (a double-clicked Skip or a skip racing a scheduled advance can no longer claim two items at once),
+    ignored while a relay owns the primary slot (an item claimed mid-fetch is kept and played after the relay). A
+    song followed by a jingle/ad/voice track/silence, or in MANUAL mode, now **plays to its real end** instead of
+    being cut at its mix-out point; only song→song acts at the mix-out point. A queue item whose decode fails
+    outright (storage down, bad URL, corrupt file) triggers an exponential backoff (5s→60s) instead of instantly
+    claiming the next item. Songs' now-playing `durationMs` is their on-air time (mix-out − mix-in). Jingle overlays
+    have a hang backstop. `playback/next` gets a 15s client timeout (it commits the claim before responding).
+  - *Security.* Caddy answers `/api/internal*` with 404 (the encoder reaches `api:3000/internal` directly);
+    `internalOnly` compares in constant time. NATS users are pinned to connection types (`api`/`encoder`: STANDARD
+    only, `control-panel`: WEBSOCKET only), so the public `/realtime/` websocket can't be used to log in as a
+    privileged user; NATS passwords may now contain `"`/`\`. `apply-metadata` only fetches cover art over https from
+    `coverartarchive.org`/`*.archive.org` (redirects re-checked), image types only, ≤10MB. Access and refresh JWTs
+    carry a `typ` claim (a refresh token no longer works as an access token — existing sessions need one re-login),
+    and `/auth/refresh` re-checks that the user still exists and is active. Auth cookies' `Secure` flag follows
+    `PUBLIC_BASE_URL`'s scheme (`COOKIE_SECURE` overrides), not `NODE_ENV`.
+  - *API resilience.* The api's NATS client reconnects forever (it used to give up after ~20s); S3 object streams
+    use `pipeline()` (a MinIO reset mid-stream no longer crashes the api, aborted previews release their socket);
+    `S3_FORCE_PATH_STYLE=false` is honored.
+  - *Frontends.* Client ids no longer use `crypto.randomUUID()` directly (undefined over plain-HTTP LAN access,
+    which broke toasts/uploads/editors there). The control panel refreshes its access cookie every 10 minutes
+    (cover art/previews/waveforms can't retry a 401 themselves), uploads retry once after a refresh, an expired
+    session drops to `/login` (query cache cleared, realtime socket closed — also on logout), login returns to the
+    deep link you came from, the realtime NATS socket reconnects with backoff, and the voice-track recorder picks a
+    supported format and releases the mic on failure. The player rebuilds its hls.js instance on manifest-level
+    errors (a `master.m3u8` 404 during an encoder restart used to leave it "reconnecting…" forever). The generated
+    `env-config.js` uses a same-origin `/api` base, so the SPAs work from any hostname the site is reached by.
+
 **Stubbed:** nothing, as of this pass — live mic mixing (the last remaining stub) is now real; see the **Live Mic**
 and **Voice Track** entries above.
 
@@ -785,7 +855,8 @@ and **Voice Track** entries above.
 **Port 80 already in use.** Set `WEBSERVER_HOST_PORT=8000` (or any free port) in `.env` and update
 `PUBLIC_BASE_URL` to match (e.g. `http://localhost:8000`) — don't edit `docker-compose.yml`'s port mapping directly,
 compose merges list fields across `-f` files by concatenation rather than replacement, so a second `ports:` entry
-doesn't remove the first.
+doesn't remove the first. Same for **port 443** (`Bind for 0.0.0.0:443 failed: port is already allocated`): the HTTPS port is
+published even in plain-HTTP mode, so set `WEBSERVER_HTTPS_PORT=8443` (or any free port).
 
 **API container unhealthy / `NatsError: Authorization Violation`.** Check that every service reading a given NATS
 password uses the _same_ env var name as `infra/docker/nats/nats-server.conf.template` expects
@@ -879,7 +950,9 @@ Vite as a literal, unrecognized argument. Fixed by baking `--host` directly into
    `player-dev` containers themselves — there, `localhost` is the container, not `api`. Fixed by setting
    `VITE_DEV_API_PROXY_TARGET=http://api:3000` for both dev services in `docker-compose.override.yml`, using Docker's
    embedded DNS over the `edge` network they share with `api` (rather than `host.docker.internal`, which needs extra
-   config on native Linux Docker).
+   config on native Linux Docker). The control panel's `/live-mic` websocket proxy follows the same pattern:
+   `VITE_DEV_LIVE_MIC_PROXY_TARGET` (default `http://localhost:8080`, the encoder's published port; `http://encoder:8080`
+   inside `control-panel-dev`), with the same `/live-mic` prefix strip Caddy does.
 
 **The public player never plays anything through `player-dev` (`:5174`)**, showing a persistent "Stream error
 (networkError): manifestParsingError — reconnecting…" banner even though the stack is otherwise healthy.
@@ -967,6 +1040,63 @@ docker run --rm --network <project>_data -e PGPASSWORD=<old password> postgres:1
 (Redis is the exception — `requirepass` isn't stored in its persisted data at all, so recreating that one container,
 e.g. `docker compose up -d --force-recreate redis`, is enough.)
 
+**Live mic: "go on air" fails with `a live mic session is already active` (409) and only an `api` restart fixes
+it.** Fixed — the api's one-broadcast guard used to be cleared *only* by the explicit off-air button
+(`POST /live-mic/session/:id/stop`). Every other way a broadcast ends — navigating away from the Dashboard while on
+air, closing/reloading the tab, a network drop, the encoder dropping the socket, the browser never connecting — left
+it set for the session token's full 6h TTL. The guard now lives in `apps/api/src/modules/liveMic/
+liveMicSessionState.ts` and is released by the encoder's `radio.encoder.status.live.ended` (and, as a backstop, by a
+heartbeat whose `activeSlots.mic` is false). If you still see the 409, check that the encoder is publishing
+heartbeats (System Status page).
+
+**Live mic: on air, but the mic is near-silent / fades out after a second, or "pumps".** The browser's default
+`getUserMedia` audio processing is built for video calls: noise suppression treats any steady sound as noise
+(reproduced with a steady 1 kHz test tone: present for ~1.1s, then gone — in the raw `getUserMedia` track itself,
+before any of our code touches it), auto gain control rides the level against the ducked music bed, and echo
+cancellation can eat speech. `liveMicBroadcast.ts` now requests `echoCancellation`/`noiseSuppression`/
+`autoGainControl: false`; if a manager's room really needs it, use a hardware/OS-level noise gate instead. (The
+Voice Track recorder still uses the browser defaults.)
+
+**Live mic: "The browser only allows microphone access on HTTPS…"** (or, before that check existed, `Cannot read
+properties of undefined (reading 'getUserMedia')`). Browsers only expose `navigator.mediaDevices` in a secure
+context — `https://…` or `http://localhost`. Opening the panel as `http://192.168.x.x:8000/manage/` from another
+machine can never capture a mic. Set `SITE_ADDRESS` to a real domain for automatic HTTPS (see Deployment), or use
+`localhost` (e.g. via an SSH tunnel).
+
+**Live mic: the encoder process died (`write EPIPE` → `uncaughtException`, the stream's playlist gets
+`#EXT-X-ENDLIST`) when a mic session's decoder failed.** Fixed — `MicSource` wrote to its ffmpeg's stdin with no
+`'error'` listener, so a write racing ffmpeg's exit (it rejected the input, crashed, or was killed) became an
+uncaught exception that took down the whole encoder, not just the mic session; under `tsx watch` (dev) the process
+then just sits there dead until a file changes. Reproduced by sending non-audio bytes over an authorized socket. The
+error is now contained and the session ends cleanly.
+
+**Live mic: choppy audio / short gaps under a less-than-perfect uplink.** Fixed — `MicSource` used to hand frames to
+the mixer the moment they were decoded, but `MediaRecorder` delivers audio in ~250-320ms bursts and the network adds
+jitter, so the buffer ran dry between bursts (replaying a real Chrome capture with 100-450ms delivery jitter: up to 7
+gaps of 20-120ms per 25s before; 0 after) — and after any stall the backlog never shrank again. It now has an
+adaptive jitter buffer (see the Live Mic entry in Implementation status); `mic source stopped` log lines report
+`underruns`/`framesTrimmed`/`finalJitterTargetMs` per session.
+
+**`encoder` dev container crashes at startup with `Cannot find package 'zod' imported from
+/workspace/packages/shared-types/...`** right after a fresh image build. The encoder image used to `pnpm install`
+*without* the lockfile, resolving the catalog's caret ranges to whatever was newest that day (zod 4.6.x), while the
+dev override bind-mounts `./packages` — including the host's lockfile-installed
+`packages/shared-types/node_modules/zod -> .pnpm/zod@4.4.3/...` symlink, a path that then didn't exist in the
+container. `apps/encoder/Dockerfile` now copies `pnpm-lock.yaml` in first. If it still happens, rebuild and renew
+the anon volumes: `docker compose up -d --build --force-recreate --renew-anon-volumes encoder`.
+
 **`prisma.user... The table does not exist`.** No migration has been generated yet — see the `prisma migrate dev
 --name init` step in [Getting started](#getting-started-local-development). `prisma migrate deploy` (what the
 `api-migrate` service runs) only _applies_ existing migration files, it doesn't generate new ones from the schema.
+
+**Deleting a song/jingle/ad returns `409 … still used by schedule rule …` / `… still pending in the queue`.** By
+design — remove it from that rule, or remove the queue item, first (see the robustness bullet under Implementation
+status; rotation filler doesn't block). If an older database still has a media-less queue row from before this
+guard, the encoder's claim cancels it on its own (`queue item has no media attached (deleted?) -- cancelling it`).
+
+**Logged out everywhere right after updating.** Expected once: access/refresh tokens now carry a `typ` claim, and
+tokens minted before that are rejected. Log in again.
+
+**A weekly/interval rule or clock-wheel slot fires at the "wrong" hour.** Those times are UTC wall-clock (labeled
+"UTC" in the editors); a ONE_TIME date/time, by contrast, is entered in your browser's local time. There's no station
+timezone setting yet — enter UTC.

@@ -14,16 +14,15 @@ import {
 
 export const authRoutes = Router();
 
-// `secure: true` only in production, where the deployment README assumes TLS
-// termination in front of nginx. In dev the whole stack runs over plain HTTP
-// (http://localhost:8000, or :5173 for the Vite HMR servers) — a `Secure`
-// cookie on a non-HTTPS origin isn't just unsent, some browsers (Safari
-// confirmed) refuse to store it at all, so login looks like it succeeds (the
-// JSON body comes back fine) while every subsequent authenticated request
-// 401s because no cookie was ever actually kept.
+// `secure` follows whether the site is really served over HTTPS (PUBLIC_BASE_URL's scheme, or an
+// explicit COOKIE_SECURE -- see config/env.ts), not NODE_ENV. Over plain HTTP (local dev at
+// http://localhost:8000 / :5173, or a LAN deploy with SITE_ADDRESS unset) a `Secure` cookie isn't
+// just unsent, some browsers (Safari confirmed) refuse to store it at all, so login looks like it
+// succeeds (the JSON body comes back fine) while every subsequent authenticated request 401s
+// because no cookie was ever actually kept.
 const cookieBase: CookieOptions = {
   httpOnly: true,
-  secure: config.isProduction,
+  secure: config.cookieSecure,
   sameSite: "strict",
 };
 
@@ -51,21 +50,31 @@ authRoutes.post("/login", async (req, res, next) => {
   }
 });
 
-authRoutes.post("/refresh", (req, res) => {
+authRoutes.post("/refresh", async (req, res) => {
   const refreshToken = req.cookies?.refresh_token as string | undefined;
   if (!refreshToken) {
     res.status(401).json({ error: "missing refresh token" });
     return;
   }
 
+  let tokenUser;
   try {
-    const user = verifyRefreshToken(refreshToken);
-    const accessToken = signAccessToken(user);
-    res.cookie("access_token", accessToken, { ...cookieBase, maxAge: ttlToMs(config.jwt.accessTtl) });
-    res.json(user);
+    tokenUser = verifyRefreshToken(refreshToken);
   } catch {
     res.status(401).json({ error: "invalid or expired refresh token" });
+    return;
   }
+
+  // Re-check the DB on every refresh (requireAuth never does): a deactivated/deleted user must
+  // stop getting fresh access tokens, and a role change applies from the next refresh on.
+  const user = await getAuthUser(tokenUser.id);
+  if (!user) {
+    res.status(401).json({ error: "user no longer active" });
+    return;
+  }
+  const accessToken = signAccessToken(user);
+  res.cookie("access_token", accessToken, { ...cookieBase, maxAge: ttlToMs(config.jwt.accessTtl) });
+  res.json(user);
 });
 
 authRoutes.post("/logout", (_req, res) => {

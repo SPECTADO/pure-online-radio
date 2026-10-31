@@ -1,7 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
-import jwt from "jsonwebtoken";
-import { AuthUserSchema, type AuthUserDTO, type Role } from "@spectado/shared-types";
-import { config } from "../config/env.js";
+import type { AuthUserDTO, Role } from "@spectado/shared-types";
+import { verifyToken } from "../modules/auth/auth.service.js";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -21,8 +20,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   }
 
   try {
-    const decoded = jwt.verify(token, config.jwt.secret);
-    req.user = AuthUserSchema.parse(decoded);
+    req.user = verifyToken(token, "access");
     next();
   } catch {
     res.status(401).json({ error: "invalid or expired access token" });

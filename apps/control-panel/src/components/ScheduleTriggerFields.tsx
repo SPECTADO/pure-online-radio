@@ -11,13 +11,16 @@ const labelClass = "mb-1 block text-sm font-medium text-slate-700";
 
 /** Trigger-type + insertion-mode form section shared by the schedule-rule and
  * external-stream create/edit modals -- only the fields relevant to the selected
- * triggerType are shown. */
+ * triggerType are shown. `allowPlayCount={false}` hides "Every X songs played" (external
+ * streams: the api rejects PLAY_COUNT there, see CreateExternalStreamRequestSchema). */
 export function ScheduleTriggerFields({
   value,
   onChange,
+  allowPlayCount = true,
 }: {
   value: TriggerFormState;
   onChange: (next: TriggerFormState) => void;
+  allowPlayCount?: boolean;
 }) {
   function set<K extends keyof TriggerFormState>(key: K, v: TriggerFormState[K]) {
     onChange({ ...value, [key]: v });
@@ -45,7 +48,7 @@ export function ScheduleTriggerFields({
             <option value="ONE_TIME">Specific date &amp; time</option>
             <option value="WEEKLY">Day of week + time</option>
             <option value="INTERVAL">Repeat interval</option>
-            <option value="PLAY_COUNT">Every X songs played</option>
+            {allowPlayCount && <option value="PLAY_COUNT">Every X songs played</option>}
           </select>
         </label>
         <label>
@@ -71,7 +74,7 @@ export function ScheduleTriggerFields({
       {(value.triggerType === "WEEKLY" || value.triggerType === "INTERVAL") && (
         <div>
           <span className={labelClass}>
-            {value.triggerType === "INTERVAL" ? "Days (none selected = every day)" : "Days"}
+            {value.triggerType === "INTERVAL" ? "Days (UTC; none selected = every day)" : "Days (UTC)"}
           </span>
           <div className="flex flex-wrap gap-2">
             {WEEKDAY_LABELS.map((label, day) => (
@@ -94,7 +97,7 @@ export function ScheduleTriggerFields({
 
       {value.triggerType === "WEEKLY" && (
         <label>
-          <span className={labelClass}>Time of day</span>
+          <span className={labelClass}>Time of day (UTC)</span>
           <TimePicker value={value.timeOfDay} onChange={(timeOfDay) => set("timeOfDay", timeOfDay)} />
         </label>
       )}
@@ -113,11 +116,11 @@ export function ScheduleTriggerFields({
           </label>
           <div className="grid grid-cols-2 gap-4">
             <label>
-              <span className={labelClass}>Window start (optional, default midnight)</span>
+              <span className={labelClass}>Window start (UTC, optional, default midnight)</span>
               <TimePicker value={value.windowStart} onChange={(windowStart) => set("windowStart", windowStart)} />
             </label>
             <label>
-              <span className={labelClass}>Window end (optional, default end of day)</span>
+              <span className={labelClass}>Window end (UTC, optional, default end of day)</span>
               <TimePicker value={value.windowEnd} onChange={(windowEnd) => set("windowEnd", windowEnd)} />
             </label>
           </div>

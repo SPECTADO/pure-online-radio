@@ -29,7 +29,15 @@ export class RelayController {
   ) {}
 
   async handleRelayStart(command: RelayStartCommand): Promise<void> {
+    const previous = this.current;
     this.teardownCurrent();
+    // A different relay preempted this one: the api only moves a NATURAL-end stream out of
+    // PLAYING on relay.ended, so the replaced one must still get it -- without resuming the
+    // queue, since the new relay takes the slot right away.
+    if (previous && previous.relayId !== command.relayId) {
+      this.logger.info({ relayId: previous.relayId, replacedBy: command.relayId }, "relay replaced by another relay");
+      this.statusPublisher.publishRelayEnded({ ts: new Date().toISOString(), relayId: previous.relayId, reason: "stopped" });
+    }
     this.queueController.suspendForRelay();
 
     const source = new RelaySource({ relayId: command.relayId, url: command.url, onFailure: command.onFailure }, this.logger);

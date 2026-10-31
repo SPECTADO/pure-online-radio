@@ -26,7 +26,7 @@ import { useQueueReorder } from "../lib/useQueueReorder";
 import { formatDuration, formatTimeOfDay } from "../lib/format";
 import { useTimeFormat } from "../lib/useTimeFormat";
 import { useAudioInputDevices, type AudioInputDevice } from "../lib/useAudioInputDevices";
-import { LiveMicBroadcast } from "../lib/liveMicBroadcast";
+import { LiveMicBroadcast, liveMicSocketUrl, liveMicUnsupportedReason } from "../lib/liveMicBroadcast";
 import { ProgressBar } from "../components/ProgressBar";
 import { MediaKindBadge } from "../components/MediaKindBadge";
 import { QuickAddSection } from "../components/QuickAddSection";
@@ -141,19 +141,31 @@ export function DashboardPage() {
     onError: (err) => setActionError(describeError(err, "stop the live mic")),
   });
   const startLiveMicMutation = useMutation({
-    mutationFn: () => apiClient.post<LiveMicSessionDTO>("/live-mic/session"),
+    mutationFn: () => {
+      // Fail fast, before the api mounts a (music-ducking) mic slot on the encoder for a
+      // broadcast this page could never actually capture -- e.g. plain-http LAN access.
+      const unsupported = liveMicUnsupportedReason();
+      if (unsupported) return Promise.reject(new Error(unsupported));
+      return apiClient.post<LiveMicSessionDTO>("/live-mic/session");
+    },
     onSuccess: async (session) => {
       const broadcast = new LiveMicBroadcast();
       try {
-        await broadcast.start({ deviceId: micDeviceId, volume: micVolume, wsUrl: session.wsUrl });
-        broadcast.onClose(() => {
+        await broadcast.start({ deviceId: micDeviceId, volume: micVolume, wsUrl: liveMicSocketUrl(session.wsPath) });
+        broadcast.onClose((reason) => {
           if (broadcastRef.current === broadcast) {
             broadcastRef.current = null;
             setLiveMicSession(null);
+            setActionError(`Live mic went off air: ${reason ?? "connection closed"}.`);
           }
         });
         broadcastRef.current = broadcast;
         setLiveMicSession(session);
+        // The duck target is encoder-side state that resets to its default whenever the encoder
+        // restarts -- re-send the slider's current value so the music bed matches what's shown.
+        apiClient.post("/live-mic/music-volume", { volume: musicVolume }).catch(() => {
+          setActionError("Couldn't update the music volume.");
+        });
       } catch (err) {
         setActionError(describeError(err, "capture the microphone"));
         stopLiveMicMutation.mutate(session.sessionId);

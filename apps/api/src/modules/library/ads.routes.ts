@@ -4,11 +4,12 @@ import { Prisma, prisma } from "@spectado/database";
 import { AdSchema, CreateAdRequestSchema, UpdateAdRequestSchema, type AdDTO } from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { audioUpload } from "../../middleware/upload.js";
-import { extractAudioMetadata } from "../../lib/audioMetadata.js";
+import { extractAudioMetadata, UNKNOWN_DURATION_ERROR } from "../../lib/audioMetadata.js";
 import { optionalStringField } from "../../lib/multipartFields.js";
 import { adAudioKey, deleteObject, extensionFor, uploadObject } from "../../lib/storage.js";
 import { streamAudioResponse } from "../../lib/streamAudioResponse.js";
 import { ensureAllCategoryId } from "./allCategory.js";
+import { deletePendingRotationItems, findBlockingMediaReference } from "../../lib/mediaReferences.js";
 
 export const adsRoutes = Router();
 
@@ -76,6 +77,10 @@ adsRoutes.post("/", audioUpload, async (req, res) => {
   }
 
   const id3 = await extractAudioMetadata(audioFile.buffer, audioFile.mimetype);
+  if (id3.durationMs <= 0) {
+    res.status(400).json({ error: UNKNOWN_DURATION_ERROR });
+    return;
+  }
   const fallbackTitle = audioFile.originalname.replace(/\.[^.]+$/, "");
   const title = parsed.data.title ?? id3.title ?? fallbackTitle;
 
@@ -138,6 +143,10 @@ adsRoutes.patch("/:id", audioUpload, async (req: Request<{ id: string }>, res) =
   let newAudioKey: string | null = null;
   if (audioFile) {
     const id3 = await extractAudioMetadata(audioFile.buffer, audioFile.mimetype);
+    if (id3.durationMs <= 0) {
+      res.status(400).json({ error: UNKNOWN_DURATION_ERROR });
+      return;
+    }
     newAudioKey = adAudioKey(existing.id, extensionFor(audioFile.originalname, audioFile.mimetype));
     await uploadObject(newAudioKey, audioFile.buffer, audioFile.mimetype);
     data.fileKey = newAudioKey;
@@ -158,7 +167,16 @@ adsRoutes.delete("/:id", async (req, res) => {
     return;
   }
 
-  await prisma.ad.delete({ where: { id: existing.id } });
+  const blocking = await findBlockingMediaReference("adId", [existing.id]);
+  if (blocking) {
+    res.status(409).json({ error: `"${existing.title}" is ${blocking.reason}` });
+    return;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await deletePendingRotationItems(tx, "adId", [existing.id]);
+    await tx.ad.delete({ where: { id: existing.id } });
+  });
   await deleteObject(existing.fileKey).catch(() => {});
   res.status(204).send();
 });

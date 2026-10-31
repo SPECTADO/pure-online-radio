@@ -33,19 +33,36 @@ export async function getAuthUser(userId: string): Promise<AuthUserDTO | null> {
   return { id: user.id, username: user.username, role: user.role };
 }
 
+/** Access and refresh tokens share one secret, so each carries a `typ` claim and each verifier
+ * checks it -- otherwise a 7-day refresh token dropped into the access_token cookie would pass
+ * requireAuth directly. (Tokens minted before `typ` existed are rejected: a one-time re-login.) */
+export type TokenType = "access" | "refresh";
+
 export function signAccessToken(user: AuthUserDTO): string {
   // expiresIn as a number of seconds sidesteps @types/jsonwebtoken's `StringValue`
   // template-literal type, which a plain `string` from env can't satisfy statically.
-  return jwt.sign(user, config.jwt.secret, { expiresIn: Math.floor(ttlToMs(config.jwt.accessTtl) / 1000) });
+  return jwt.sign({ ...user, typ: "access" satisfies TokenType }, config.jwt.secret, {
+    expiresIn: Math.floor(ttlToMs(config.jwt.accessTtl) / 1000),
+  });
 }
 
 export function signRefreshToken(user: AuthUserDTO): string {
-  return jwt.sign(user, config.jwt.secret, { expiresIn: Math.floor(ttlToMs(config.jwt.refreshTtl) / 1000) });
+  return jwt.sign({ ...user, typ: "refresh" satisfies TokenType }, config.jwt.secret, {
+    expiresIn: Math.floor(ttlToMs(config.jwt.refreshTtl) / 1000),
+  });
+}
+
+/** Verifies a token's signature/expiry *and* its `typ`; throws on any mismatch. */
+export function verifyToken(token: string, typ: TokenType): AuthUserDTO {
+  const decoded = jwt.verify(token, config.jwt.secret);
+  if (typeof decoded !== "object" || decoded.typ !== typ) {
+    throw new Error(`not a${typ === "access" ? "n" : ""} ${typ} token`);
+  }
+  return AuthUserSchema.parse(decoded);
 }
 
 export function verifyRefreshToken(token: string): AuthUserDTO {
-  const decoded = jwt.verify(token, config.jwt.secret);
-  return AuthUserSchema.parse(decoded);
+  return verifyToken(token, "refresh");
 }
 
 /** Converts a jsonwebtoken-style TTL string ("15m", "7d", ...) to milliseconds for cookie maxAge. */

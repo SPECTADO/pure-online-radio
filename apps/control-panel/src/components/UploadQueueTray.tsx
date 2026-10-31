@@ -43,14 +43,20 @@ export function UploadQueueTray() {
               <span className="truncate text-sm text-slate-700" title={item.filename}>
                 {item.filename}
               </span>
-              <button
-                type="button"
-                onClick={() => dismiss(item.id)}
-                aria-label="Dismiss"
-                className="shrink-0 text-xs text-slate-400 hover:text-slate-600"
-              >
-                ✕
-              </button>
+              {/* Hidden mid-upload: dismissing only drops the row (the XHR isn't
+                  abortable from here), so the upload would still land in the library
+                  and stop counting toward the concurrency cap. Queued items can be
+                  dismissed -- that does cancel them. */}
+              {item.status !== "uploading" && (
+                <button
+                  type="button"
+                  onClick={() => dismiss(item.id)}
+                  aria-label="Dismiss"
+                  className="shrink-0 text-xs text-slate-400 hover:text-slate-600"
+                >
+                  ✕
+                </button>
+              )}
             </div>
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
               <div

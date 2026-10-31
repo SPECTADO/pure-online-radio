@@ -18,6 +18,12 @@ export async function connectNats(): Promise<NatsConnection> {
     user: config.nats.user,
     pass: config.nats.password,
     name: "spectado-api",
+    // nats.js defaults to 10 attempts x 2s -- a NATS outage/rebuild longer than ~20s would close
+    // the connection for good (every publish then throws, every subscription loop ends) with
+    // nothing to bring it back short of restarting the api. Retry forever, like the encoder.
+    reconnect: true,
+    maxReconnectAttempts: -1,
+    reconnectTimeWait: 2000,
   });
 
   logger.info({ url: config.nats.url }, "[nats] connected");

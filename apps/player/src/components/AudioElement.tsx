@@ -69,6 +69,25 @@ export function AudioElement({ playing, muted, volume, onError }: AudioElementPr
     if (Hls.isSupported()) {
       let hls = new Hls();
 
+      function rebuild(instance: Hls) {
+        instance.destroy();
+        hls = new Hls();
+        bind(hls);
+        hls.loadSource(STREAM_URL);
+        hls.attachMedia(audio!);
+        resumeIfPlaying();
+      }
+
+      // Fatal manifest-level failures (e.g. master.m3u8 404s while the encoder
+      // restarts): startLoad() never re-requests the manifest (hls.js only
+      // fetches it via loadSource), so it would retry nothing, no further error
+      // would fire, and the page would say "reconnecting…" forever.
+      const MANIFEST_ERRORS: string[] = [
+        Hls.ErrorDetails.MANIFEST_LOAD_ERROR,
+        Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT,
+        Hls.ErrorDetails.MANIFEST_PARSING_ERROR,
+      ];
+
       function bind(instance: Hls) {
         // Proof the stream is healthy again -- a fragment only loads once
         // the manifest/segments are actually reachable.
@@ -80,6 +99,10 @@ export function AudioElement({ playing, muted, volume, onError }: AudioElementPr
 
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
+              if (MANIFEST_ERRORS.includes(data.details)) {
+                scheduleRetry(() => rebuild(instance));
+                break;
+              }
               scheduleRetry(() => {
                 instance.startLoad();
                 resumeIfPlaying();
@@ -94,14 +117,7 @@ export function AudioElement({ playing, muted, volume, onError }: AudioElementPr
             default:
               // Not individually recoverable -- tear down and build a fresh
               // instance rather than leaving playback dead forever.
-              scheduleRetry(() => {
-                instance.destroy();
-                hls = new Hls();
-                bind(hls);
-                hls.loadSource(STREAM_URL);
-                hls.attachMedia(audio!);
-                resumeIfPlaying();
-              });
+              scheduleRetry(() => rebuild(instance));
               break;
           }
         });

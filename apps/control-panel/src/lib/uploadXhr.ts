@@ -1,4 +1,4 @@
-import { apiUrl } from "./apiClient";
+import { apiUrl, refreshAccessToken } from "./apiClient";
 
 function safeJsonParse(text: string): unknown {
   try {
@@ -16,11 +16,35 @@ function safeJsonParse(text: string): unknown {
  * API surface; every other request in the app goes through the simpler
  * fetch-based apiClient.
  */
-export function uploadWithProgress(
+export async function uploadWithProgress(
   path: string,
   formData: FormData,
   onProgress: (percent: number) => void,
 ): Promise<unknown> {
+  // Same 401 -> /auth/refresh -> retry-once dance as apiClient.request(): a batch of large
+  // uploads (3 at a time) can easily outlive the 15-minute access cookie.
+  const first = await sendOnce(path, formData, onProgress);
+  if (first.status === 401 && (await refreshAccessToken())) {
+    return finish(await sendOnce(path, formData, onProgress));
+  }
+  return finish(first);
+}
+
+interface XhrResult {
+  status: number;
+  body: unknown;
+}
+
+function finish({ status, body }: XhrResult): unknown {
+  if (status >= 200 && status < 300) return body;
+  const message =
+    body && typeof body === "object" && "error" in body
+      ? String((body as { error: unknown }).error)
+      : `Upload failed with status ${status}`;
+  throw new Error(message);
+}
+
+function sendOnce(path: string, formData: FormData, onProgress: (percent: number) => void): Promise<XhrResult> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", apiUrl(path));
@@ -35,17 +59,7 @@ export function uploadWithProgress(
     xhr.onload = () => {
       const isJson = (xhr.getResponseHeader("content-type") ?? "").includes("application/json");
       const body = xhr.responseText ? (isJson ? safeJsonParse(xhr.responseText) : xhr.responseText) : null;
-
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(body);
-        return;
-      }
-
-      const message =
-        body && typeof body === "object" && "error" in body
-          ? String((body as { error: unknown }).error)
-          : `Upload failed with status ${xhr.status}`;
-      reject(new Error(message));
+      resolve({ status: xhr.status, body });
     };
 
     xhr.onerror = () => reject(new Error("Network error during upload"));

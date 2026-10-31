@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type { AuthUserDTO } from "@spectado/shared-types";
-import { apiClient, ApiError } from "./apiClient";
+import { apiClient, ApiError, setOnSessionExpired } from "./apiClient";
+import { natsClient } from "./natsClient";
+import { queryClient } from "./queryClient";
 
 interface AuthState {
   user: AuthUserDTO | null;
@@ -55,6 +57,20 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Best-effort: even if the request fails (e.g. API unreachable), drop
       // the local session so the UI reflects "logged out".
     }
-    set({ user: null });
+    endLocalSession();
   },
 }));
+
+/** Drops everything tied to the current session: the realtime socket (it'd otherwise stay
+ * subscribed after logout) and cached queries (a different user logging in next in the same
+ * tab would otherwise see the previous session's data until refetch). ProtectedRoute then
+ * redirects to /login. */
+function endLocalSession() {
+  void natsClient.disconnect();
+  queryClient.clear();
+  useAuthStore.setState({ user: null });
+}
+
+setOnSessionExpired(() => {
+  if (useAuthStore.getState().user) endLocalSession();
+});

@@ -48,6 +48,16 @@ export function refineScheduleTrigger(data: ScheduleTriggerDTO, ctx: z.Refinemen
           path: ["intervalMinutes"],
         });
       }
+      // The engine (apps/api/src/scheduler/triggerEngine.ts) evaluates the window within a single
+      // day, so an overnight window (22:00-06:00) or one ending at 00:00 could never fire. "HH:mm"
+      // strings compare correctly as plain strings.
+      if (data.windowEnd && (data.windowStart ?? "00:00") >= data.windowEnd) {
+        ctx.addIssue({
+          code: "custom",
+          message: "windowEnd must be after windowStart on the same day (overnight windows are not supported)",
+          path: ["windowEnd"],
+        });
+      }
       break;
     case "PLAY_COUNT":
       if (!data.everyNPlays) {

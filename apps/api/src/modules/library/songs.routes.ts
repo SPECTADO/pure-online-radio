@@ -16,7 +16,7 @@ import {
 } from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { songUpload } from "../../middleware/upload.js";
-import { extractAudioMetadata } from "../../lib/audioMetadata.js";
+import { extractAudioMetadata, UNKNOWN_DURATION_ERROR } from "../../lib/audioMetadata.js";
 import { parseJsonArrayField, optionalStringField, optionalNumberField } from "../../lib/multipartFields.js";
 import {
   deleteObject,
@@ -26,7 +26,8 @@ import {
   songCoverArtKey,
   uploadObject,
 } from "../../lib/storage.js";
-import { streamAudioResponse } from "../../lib/streamAudioResponse.js";
+import { pipeObjectToResponse, streamAudioResponse } from "../../lib/streamAudioResponse.js";
+import { deletePendingRotationItems, findBlockingMediaReference } from "../../lib/mediaReferences.js";
 import { ensureAllCategoryId } from "./allCategory.js";
 import { fetchCoverArtImage, searchSongMetadata } from "./metadataProviders/musicBrainzProvider.js";
 
@@ -85,10 +86,21 @@ songsRoutes.post("/batch-delete", async (req, res) => {
 
   const songs = await prisma.song.findMany({
     where: { id: { in: parsed.data.ids } },
-    select: { id: true, fileKey: true, coverArtKey: true },
+    select: { id: true, title: true, fileKey: true, coverArtKey: true },
   });
+  const songIds = songs.map((s) => s.id);
 
-  await prisma.song.deleteMany({ where: { id: { in: songs.map((s) => s.id) } } });
+  const blocking = await findBlockingMediaReference("songId", songIds);
+  if (blocking) {
+    const title = songs.find((s) => s.id === blocking.mediaId)?.title ?? blocking.mediaId;
+    res.status(409).json({ error: `"${title}" is ${blocking.reason} (nothing was deleted)` });
+    return;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await deletePendingRotationItems(tx, "songId", songIds);
+    await tx.song.deleteMany({ where: { id: { in: songIds } } });
+  });
   for (const song of songs) {
     await deleteObject(song.fileKey).catch(() => {});
     if (song.coverArtKey) await deleteObject(song.coverArtKey).catch(() => {});
@@ -164,7 +176,7 @@ songsRoutes.get("/:id/cover-art", async (req, res) => {
   const { body, contentType } = await getObjectStream(song.coverArtKey);
   res.setHeader("Content-Type", contentType);
   res.setHeader("Cache-Control", "private, max-age=300");
-  body.pipe(res);
+  await pipeObjectToResponse(body, res);
 });
 
 // For control-panel audio preview -- same never-a-direct-MinIO-URL reasoning
@@ -214,6 +226,10 @@ songsRoutes.post("/", songUpload, async (req, res) => {
   }
 
   const id3 = await extractAudioMetadata(audioFile.buffer, audioFile.mimetype);
+  if (id3.durationMs <= 0) {
+    res.status(400).json({ error: UNKNOWN_DURATION_ERROR });
+    return;
+  }
   const fallbackTitle = audioFile.originalname.replace(/\.[^.]+$/, "");
   const title = parsed.data.title ?? id3.title ?? fallbackTitle;
   const artist = parsed.data.artist ?? id3.artist ?? "Unknown Artist";
@@ -316,6 +332,10 @@ songsRoutes.patch("/:id", songUpload, async (req: Request<{ id: string }>, res) 
   let newAudioKey: string | null = null;
   if (audioFile) {
     const id3 = await extractAudioMetadata(audioFile.buffer, audioFile.mimetype);
+    if (id3.durationMs <= 0) {
+      res.status(400).json({ error: UNKNOWN_DURATION_ERROR });
+      return;
+    }
     newAudioKey = songAudioKey(existing.id, extensionFor(audioFile.originalname, audioFile.mimetype));
     await uploadObject(newAudioKey, audioFile.buffer, audioFile.mimetype);
     data.fileKey = newAudioKey;
@@ -414,7 +434,16 @@ songsRoutes.delete("/:id", async (req, res) => {
     return;
   }
 
-  await prisma.song.delete({ where: { id: existing.id } });
+  const blocking = await findBlockingMediaReference("songId", [existing.id]);
+  if (blocking) {
+    res.status(409).json({ error: `"${existing.title}" is ${blocking.reason}` });
+    return;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await deletePendingRotationItems(tx, "songId", [existing.id]);
+    await tx.song.delete({ where: { id: existing.id } });
+  });
   await deleteObject(existing.fileKey).catch(() => {});
   if (existing.coverArtKey) await deleteObject(existing.coverArtKey).catch(() => {});
   res.status(204).send();

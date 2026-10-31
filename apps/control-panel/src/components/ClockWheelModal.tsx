@@ -6,6 +6,7 @@ import { showToast } from "../lib/toastStore";
 import { Modal } from "./Modal";
 import { ClockWheelSlotEditor, type EditableSlot } from "./ClockWheelSlotEditor";
 import { ClockWheelStepPicker, type EditableStep } from "./ClockWheelStepPicker";
+import { newId } from "../lib/id";
 
 const inputClass =
   "w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500";
@@ -21,7 +22,7 @@ export function ClockWheelModal({ wheel, onClose }: { wheel?: ClockWheelDTO; onC
   const [isActive, setIsActive] = useState(wheel?.isActive ?? true);
   const [slots, setSlots] = useState<EditableSlot[]>(
     wheel?.slots.map((slot) => ({
-      key: crypto.randomUUID(),
+      key: newId(),
       weekdays: slot.weekdays,
       startTime: slot.startTime,
       endTime: slot.endTime,
@@ -32,7 +33,7 @@ export function ClockWheelModal({ wheel, onClose }: { wheel?: ClockWheelDTO; onC
       .slice()
       .sort((a, b) => a.order - b.order)
       .map((step) => ({
-        key: crypto.randomUUID(),
+        key: newId(),
         mediaKind: step.mediaKind,
         selectionStrategy: step.selectionStrategy,
         categoryId: step.categoryId,

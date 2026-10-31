@@ -291,6 +291,7 @@ const timelineItemInclude = {
   song: { select: { durationMs: true } },
   jingle: { select: { durationMs: true } },
   ad: { select: { durationMs: true } },
+  voiceTrack: { select: { durationMs: true } },
 } satisfies Prisma.ScheduledItemInclude;
 
 /** Walks the already-PENDING timeline in the same 3-tier claim-priority order as
@@ -319,7 +320,7 @@ async function computeQueuedAhead(now: Date): Promise<{ coveredMs: number; curso
   let coveredMs = 0;
   let lastPosition = 0;
   for (const item of [...due, ...manual, ...wheelItems]) {
-    const media = item.song ?? item.jingle ?? item.ad;
+    const media = item.song ?? item.jingle ?? item.ad ?? item.voiceTrack;
     coveredMs += media?.durationMs ?? 0;
     lastPosition = Math.max(lastPosition, item.position);
   }
@@ -344,6 +345,7 @@ export async function evaluateClockWheelFill(now: Date): Promise<void> {
   if (wheels.length === 0) return; // not seeded yet -- nothing to fall back to
 
   let iterations = 0;
+  let consecutiveMisses = 0;
   while (coveredMs < horizonMs) {
     if (iterations >= MAX_CLOCK_WHEEL_FILL_ITEMS_PER_TICK) {
       logger.warn({ horizonMs, coveredMs }, "clock-wheel fill hit its per-tick safety cap -- continuing next tick");
@@ -369,13 +371,23 @@ export async function evaluateClockWheelFill(now: Date): Promise<void> {
 
     const picked = await pickMediaForStep(step, cursor);
     if (!picked) {
-      logger.warn(
+      logger.debug(
         { wheelId: wheel.id, stepId: step.id, mediaKind: step.mediaKind },
         "clock-wheel step has no eligible media -- skipping this rotation slot",
       );
       await prisma.clockWheel.update({ where: { id: wheel.id }, data: { rotationCursor: wheel.rotationCursor } });
+      // The cursor/coverage don't move on a miss, so a wheel where *no* step has eligible media
+      // (fresh install, empty category, every ad outside its window) would otherwise spin to the
+      // per-tick cap -- ~400 queries + 200 warn lines every 15s. One full rotation without a pick
+      // means nothing can be planned from this wheel right now: stop this tick, warn once.
+      consecutiveMisses++;
+      if (consecutiveMisses >= wheel.steps.length) {
+        logger.warn({ wheelId: wheel.id }, "no step of the active clock wheel has eligible media -- nothing to fill");
+        return;
+      }
       continue;
     }
+    consecutiveMisses = 0;
 
     lastPosition += 1;
     await prisma.$transaction([

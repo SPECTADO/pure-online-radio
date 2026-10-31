@@ -14,6 +14,9 @@ import type { Logger } from "../util/logger.js";
  *   - "stdout" (chunk: Buffer)       raw stdout bytes (PCM for decode sources)
  *   - "stderr" (line: string)        ffmpeg logs one line at a time
  *   - "exit"   (code, signal)        process has exited
+ *   - "close"  (code, signal)        process has exited AND its stdio has been fully read
+ *                                    (every "stdout" chunk has been emitted -- "exit" can
+ *                                    arrive before the last of them)
  *   - "error"  (err: Error)          failed to spawn / runtime error
  */
 export class FfmpegProcess extends EventEmitter {
@@ -53,6 +56,10 @@ export class FfmpegProcess extends EventEmitter {
 
     child.on("exit", (code, signal) => {
       this.emit("exit", code, signal);
+    });
+
+    child.on("close", (code, signal) => {
+      this.emit("close", code, signal);
     });
   }
 
