@@ -9,7 +9,7 @@ import {
 } from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { audioUpload } from "../../middleware/upload.js";
-import { extractAudioMetadata } from "../../lib/audioMetadata.js";
+import { extractAudioMetadata, UNKNOWN_DURATION_ERROR } from "../../lib/audioMetadata.js";
 import { optionalStringField } from "../../lib/multipartFields.js";
 import { deleteObject, extensionFor, voiceTrackAudioKey, uploadObject } from "../../lib/storage.js";
 import { streamAudioResponse } from "../../lib/streamAudioResponse.js";
@@ -80,6 +80,10 @@ voiceTracksRoutes.post("/", audioUpload, async (req, res) => {
   }
 
   const id3 = await extractAudioMetadata(audioFile.buffer, audioFile.mimetype);
+  if (id3.durationMs <= 0) {
+    res.status(400).json({ error: UNKNOWN_DURATION_ERROR });
+    return;
+  }
   const fallbackTitle = audioFile.originalname.replace(/\.[^.]+$/, "");
   const title = parsed.data.title ?? id3.title ?? fallbackTitle;
 
@@ -131,6 +135,10 @@ voiceTracksRoutes.patch("/:id", audioUpload, async (req: Request<{ id: string }>
   let newAudioKey: string | null = null;
   if (audioFile) {
     const id3 = await extractAudioMetadata(audioFile.buffer, audioFile.mimetype);
+    if (id3.durationMs <= 0) {
+      res.status(400).json({ error: UNKNOWN_DURATION_ERROR });
+      return;
+    }
     newAudioKey = voiceTrackAudioKey(existing.id, extensionFor(audioFile.originalname, audioFile.mimetype));
     await uploadObject(newAudioKey, audioFile.buffer, audioFile.mimetype);
     data.fileKey = newAudioKey;

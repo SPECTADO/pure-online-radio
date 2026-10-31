@@ -19,6 +19,7 @@ import { VoiceTrackEditor } from "../components/VoiceTrackEditor";
 import { VoiceTrackUploadModal } from "../components/VoiceTrackUploadModal";
 import { ScheduleRuleModal } from "../components/ScheduleRuleModal";
 import type { PickedScheduleItem } from "../components/ScheduleItemPicker";
+import { newId } from "../lib/id";
 
 const VOICE_TRACKS_KEY = ["library", "voice-tracks"];
 
@@ -61,14 +62,17 @@ function RecorderSection({ onRecorded }: { onRecorded: (buffer: AudioBuffer) => 
       streamRef.current = stream;
       chunksRef.current = [];
 
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+      // First supported container wins (Safari < 18.4 has no WebM/Opus recording, and the
+      // constructor throws on an unsupported mimeType). The blob is only ever decoded locally.
+      const mimeType = ["audio/webm;codecs=opus", "audio/mp4"].find((t) => MediaRecorder.isTypeSupported(t));
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunksRef.current.push(event.data);
       };
       recorder.onstop = async () => {
         streamRef.current?.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
         try {
           const AudioContextCtor =
             window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -86,6 +90,10 @@ function RecorderSection({ onRecorded }: { onRecorded: (buffer: AudioBuffer) => 
       recorderRef.current = recorder;
       setRecording(true);
     } catch (err) {
+      // getUserMedia may already have succeeded (e.g. the MediaRecorder constructor threw) --
+      // release the mic, or it stays captured until the page unmounts.
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
       setError(err instanceof Error ? err.message : "Couldn't access the microphone");
     }
   }
@@ -347,7 +355,7 @@ export function VoiceTrackPage() {
           initialItems={
             [
               {
-                key: crypto.randomUUID(),
+                key: newId(),
                 mediaKind: "VOICE_TRACK",
                 mediaId: scheduling.id,
                 title: scheduling.title,

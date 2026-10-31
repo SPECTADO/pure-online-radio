@@ -9,6 +9,8 @@ import type { Logger } from "../util/logger.js";
 
 /** ~5s of buffered audio at 20ms/frame -- headroom against decode I/O jitter. */
 const RING_BUFFER_CAPACITY_FRAMES = 250;
+/** 1s -- a non-zero ffmpeg exit before this much audio counts as a failed decode (see "ended"). */
+const MIN_HEALTHY_FRAMES = 50;
 
 /**
  * REAL: decodes `directive.url` (a short-lived presigned MinIO GET url) via a
@@ -18,14 +20,21 @@ const RING_BUFFER_CAPACITY_FRAMES = 250;
  *
  * Emits `"ended"` exactly once, once ffmpeg has exited AND the ring buffer
  * has fully drained -- the signal queueController uses to advance to the next
- * queue item. `destroy()` hard-kills playback (used for an explicit "skip";
- * no graceful fade needed there, unlike the jingle overlay).
+ * queue item. Its argument is `failed`: true when the decode evidently never
+ * worked (no audio at all, or a non-zero exit within the first second -- a
+ * 403/404 presigned URL, MinIO unreachable, a corrupt file), so the controller
+ * can back off instead of instantly claiming the next item and burning through
+ * the whole queue. `"audio"` fires once, on the first decoded frame.
+ * `destroy()` hard-kills playback (used for an explicit "skip"; no graceful
+ * fade needed there, unlike the jingle overlay).
  */
 export class QueueSource extends EventEmitter implements Source {
   private readonly framer = new PcmFramer(FRAME_BYTES);
   private readonly ring = new RingBuffer<Buffer>(RING_BUFFER_CAPACITY_FRAMES);
   private readonly ffmpeg: FfmpegProcess;
   private ffmpegExited = false;
+  private exitCode: number | null = null;
+  private producedFrames = 0;
   private endedEmitted = false;
   private destroyed = false;
 
@@ -70,6 +79,7 @@ export class QueueSource extends EventEmitter implements Source {
     this.ffmpeg.on("stdout", (chunk: Buffer) => {
       if (this.destroyed) return;
       for (const frame of this.framer.push(chunk)) {
+        if (this.producedFrames++ === 0) this.emit("audio");
         if (!this.ring.push(frame)) {
           this.logger.warn({ mediaId: directive.mediaId }, "queue source ring buffer full; dropped oldest frame");
         }
@@ -78,6 +88,7 @@ export class QueueSource extends EventEmitter implements Source {
     this.ffmpeg.on("stderr", (line: string) => this.logger.debug({ line, mediaId: directive.mediaId }, "ffmpeg[queue]"));
     this.ffmpeg.on("exit", (code, signal) => {
       this.ffmpegExited = true;
+      this.exitCode = code;
       if (!this.destroyed) {
         this.logger.info({ mediaId: directive.mediaId, code, signal }, "queue source ffmpeg process exited");
       }
@@ -96,7 +107,10 @@ export class QueueSource extends EventEmitter implements Source {
     }
     if (this.ffmpegExited && !this.endedEmitted) {
       this.endedEmitted = true;
-      this.emit("ended");
+      const failed =
+        this.producedFrames === 0 ||
+        (this.exitCode !== null && this.exitCode !== 0 && this.producedFrames < MIN_HEALTHY_FRAMES);
+      this.emit("ended", failed);
     }
     return null;
   }

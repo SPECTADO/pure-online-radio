@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { Prisma, prisma } from "@spectado/database";
-import { QueueEntrySchema, ScheduleRuleSchema, UpsertScheduleRuleRequestSchema } from "@spectado/shared-types";
+import { ScheduleRuleSchema, UpsertScheduleRuleRequestSchema } from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { findActiveMedia } from "../../lib/media.js";
 import { logger } from "../../logger.js";
-import { triggerFromPrisma, triggerToPrismaData } from "../../lib/scheduleTrigger.js";
-import { queueEntryInclude, toQueueEntryDTO } from "../queue/queue.routes.js";
+import { triggerBookkeepingOnEdit, triggerFromPrisma, triggerToPrismaData } from "../../lib/scheduleTrigger.js";
+import { queueEntryInclude, toQueueEntryDTOs } from "../queue/queue.routes.js";
 
 export const scheduleRoutes = Router();
 
@@ -61,7 +61,7 @@ scheduleRoutes.get("/upcoming", async (_req, res) => {
     orderBy: [{ scheduledFor: "asc" }, { position: "asc" }],
     take: 50,
   });
-  res.json(items.map((item) => QueueEntrySchema.parse(toQueueEntryDTO(item))));
+  res.json(toQueueEntryDTOs(items));
 });
 
 scheduleRoutes.get("/", async (_req, res) => {
@@ -155,6 +155,7 @@ scheduleRoutes.patch("/:id", async (req, res) => {
         name,
         isActive,
         ...triggerToPrismaData(trigger),
+        ...triggerBookkeepingOnEdit(existing, trigger),
         items: {
           create: items.map((item, index) => ({
             order: index,

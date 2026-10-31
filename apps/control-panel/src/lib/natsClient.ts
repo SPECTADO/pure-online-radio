@@ -10,12 +10,20 @@ type MessageHandler = (data: unknown, subject: string) => void;
 
 const codec = JSONCodec();
 
+const INITIAL_RECONNECT_DELAY_MS = 2_000;
+const MAX_RECONNECT_DELAY_MS = 30_000;
+
 /**
  * Subscribe-only NATS-over-websocket client. Fetches short-lived credentials
  * from the API (never talks to NATS directly for auth) and fans out incoming
  * messages, keyed by their exact subject, to whoever registered interest via
  * `onMessage`/`useNatsSubject`. Control-panel never publishes here — all
  * commands go browser -> HTTP -> api -> NATS.
+ *
+ * Self-healing: nats.ws itself reconnects forever (`maxReconnectAttempts: -1`
+ * -- its default gives up after ~20s, e.g. across a `docker compose restart
+ * nats`), and a failed first connect or a closed connection schedules a full
+ * reconnect with backoff (re-fetching credentials), until disconnect() (logout).
  */
 class NatsClient {
   private nc: NatsConnection | null = null;
@@ -23,6 +31,10 @@ class NatsClient {
   private connecting: Promise<void> | null = null;
   private statusHandlers = new Set<StatusHandler>();
   private messageHandlers = new Map<string, Set<MessageHandler>>();
+  /** Set by disconnect() so a deliberate close doesn't trigger a reconnect. */
+  private stopped = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
 
   getStatus(): ConnectionStatus {
     return this.status;
@@ -45,6 +57,7 @@ class NatsClient {
   }
 
   async connect(): Promise<void> {
+    this.stopped = false;
     if (this.status === "connected" || this.connecting) {
       return this.connecting ?? Promise.resolve();
     }
@@ -53,6 +66,15 @@ class NatsClient {
       this.connecting = null;
     });
     return this.connecting;
+  }
+
+  private scheduleReconnect() {
+    if (this.stopped || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect().catch(() => {});
+    }, this.reconnectDelayMs);
+    this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
   }
 
   private setStatus(status: ConnectionStatus) {
@@ -68,13 +90,16 @@ class NatsClient {
         servers: creds.url,
         user: creds.user,
         pass: creds.password,
+        maxReconnectAttempts: -1,
       });
       this.nc = nc;
+      this.reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
       this.setStatus("connected");
 
       nc.closed().then(() => {
-        this.nc = null;
+        if (this.nc === nc) this.nc = null;
         this.setStatus("disconnected");
+        this.scheduleReconnect();
       });
 
       for (const subject of creds.allowedSubjects) {
@@ -94,11 +119,16 @@ class NatsClient {
     } catch (err) {
       this.nc = null;
       this.setStatus("error");
+      this.scheduleReconnect();
       throw err;
     }
   }
 
   async disconnect(): Promise<void> {
+    this.stopped = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.reconnectDelayMs = INITIAL_RECONNECT_DELAY_MS;
     await this.nc?.close();
     this.nc = null;
     this.setStatus("disconnected");

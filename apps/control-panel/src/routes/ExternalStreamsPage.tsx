@@ -107,7 +107,7 @@ export function ExternalStreamsPage() {
                       <button
                         type="button"
                         onClick={() => setModalMode(stream)}
-                        disabled={stream.status !== "SCHEDULED" && stream.status !== "STOPPED"}
+                        disabled={stream.status === "PLAYING" || stream.status === "CANCELLED"}
                         className={rowActionButton}
                       >
                         Edit

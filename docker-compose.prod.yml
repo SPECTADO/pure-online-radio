@@ -16,6 +16,10 @@ services:
 
   api:
     restart: unless-stopped
+    environment:
+      # Info-level logging. Cookie security is NOT tied to this (it follows PUBLIC_BASE_URL's
+      # scheme / COOKIE_SECURE), so this is safe on a plain-HTTP LAN deploy too.
+      NODE_ENV: production
 
   encoder:
     restart: unless-stopped

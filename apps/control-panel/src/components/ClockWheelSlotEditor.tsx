@@ -1,5 +1,6 @@
 import { rowActionButton, rowActionButtonDanger } from "../lib/buttonStyles";
 import { TimePicker } from "./TimePicker";
+import { newId } from "../lib/id";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -21,7 +22,7 @@ export function ClockWheelSlotEditor({
   onChange: (slots: EditableSlot[]) => void;
 }) {
   function addSlot() {
-    onChange([...slots, { key: crypto.randomUUID(), weekdays: [1, 2, 3, 4, 5], startTime: "06:00", endTime: "10:00" }]);
+    onChange([...slots, { key: newId(), weekdays: [1, 2, 3, 4, 5], startTime: "06:00", endTime: "10:00" }]);
   }
 
   function updateSlot(key: string, patch: Partial<EditableSlot>) {
@@ -64,6 +65,8 @@ export function ClockWheelSlotEditor({
               </button>
             ))}
           </div>
+          {/* Days/times are UTC wall-clock (apps/api/src/lib/clockWheelSlot.ts) -- there's no
+              station timezone setting yet, so say so rather than let a local time be assumed. */}
           <div className="flex flex-wrap items-center gap-3">
             <label className="flex items-center gap-2 text-sm text-slate-600">
               From
@@ -81,6 +84,7 @@ export function ClockWheelSlotEditor({
                 className="w-32"
               />
             </label>
+            <span className="text-xs text-slate-500">UTC</span>
             <button type="button" onClick={() => removeSlot(slot.key)} className={`ml-auto ${rowActionButtonDanger}`}>
               Remove
             </button>

@@ -17,6 +17,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import type { CategoryDTO, MediaKind, SelectionStrategy } from "@spectado/shared-types";
 import { rowActionButton, rowActionButtonDanger } from "../lib/buttonStyles";
+import { newId } from "../lib/id";
 
 /** Client-side only -- `key` is a stable id for dnd-kit/list rendering, never sent to the
  * API (the wire order is derived from array position, same convention as
@@ -44,7 +45,7 @@ export function ClockWheelStepPicker({
   function addStep() {
     onChange([
       ...steps,
-      { key: crypto.randomUUID(), mediaKind: "SONG", selectionStrategy: "RANDOM", categoryId: null, tag: "" },
+      { key: newId(), mediaKind: "SONG", selectionStrategy: "RANDOM", categoryId: null, tag: "" },
     ]);
   }
 

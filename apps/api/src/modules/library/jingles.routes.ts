@@ -9,11 +9,12 @@ import {
 } from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { audioUpload } from "../../middleware/upload.js";
-import { extractAudioMetadata } from "../../lib/audioMetadata.js";
+import { extractAudioMetadata, UNKNOWN_DURATION_ERROR } from "../../lib/audioMetadata.js";
 import { parseJsonArrayField, optionalStringField } from "../../lib/multipartFields.js";
 import { deleteObject, extensionFor, jingleAudioKey, uploadObject } from "../../lib/storage.js";
 import { streamAudioResponse } from "../../lib/streamAudioResponse.js";
 import { ensureAllCategoryId } from "./allCategory.js";
+import { deletePendingRotationItems, findBlockingMediaReference } from "../../lib/mediaReferences.js";
 
 export const jinglesRoutes = Router();
 
@@ -105,6 +106,10 @@ jinglesRoutes.post("/", audioUpload, async (req, res) => {
   }
 
   const id3 = await extractAudioMetadata(audioFile.buffer, audioFile.mimetype);
+  if (id3.durationMs <= 0) {
+    res.status(400).json({ error: UNKNOWN_DURATION_ERROR });
+    return;
+  }
   const fallbackTitle = audioFile.originalname.replace(/\.[^.]+$/, "");
   const title = parsed.data.title ?? id3.title ?? fallbackTitle;
 
@@ -174,6 +179,10 @@ jinglesRoutes.patch("/:id", audioUpload, async (req: Request<{ id: string }>, re
   let newAudioKey: string | null = null;
   if (audioFile) {
     const id3 = await extractAudioMetadata(audioFile.buffer, audioFile.mimetype);
+    if (id3.durationMs <= 0) {
+      res.status(400).json({ error: UNKNOWN_DURATION_ERROR });
+      return;
+    }
     newAudioKey = jingleAudioKey(existing.id, extensionFor(audioFile.originalname, audioFile.mimetype));
     await uploadObject(newAudioKey, audioFile.buffer, audioFile.mimetype);
     data.fileKey = newAudioKey;
@@ -203,7 +212,16 @@ jinglesRoutes.delete("/:id", async (req, res) => {
     return;
   }
 
-  await prisma.jingle.delete({ where: { id: existing.id } });
+  const blocking = await findBlockingMediaReference("jingleId", [existing.id]);
+  if (blocking) {
+    res.status(409).json({ error: `"${existing.title}" is ${blocking.reason}` });
+    return;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await deletePendingRotationItems(tx, "jingleId", [existing.id]);
+    await tx.jingle.delete({ where: { id: existing.id } });
+  });
   await deleteObject(existing.fileKey).catch(() => {});
   res.status(204).send();
 });

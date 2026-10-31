@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { Readable } from "node:stream";
 import {
   DeleteObjectCommand,
@@ -173,30 +174,40 @@ export async function getObjectStream(key: string, range?: string): Promise<Obje
 // with each item further namespaced by its own id -- keeps the bucket
 // browsable in the MinIO console and means deleting an item's folder never
 // risks touching another item's files.
+//
+// Every key also carries a random per-upload token: a replacement upload
+// (PATCH with a new file) must never land on the same key as the file it
+// replaces -- otherwise it overwrites the live object before validation runs,
+// and the handler's rollback `deleteObject(newKey)` would then delete the only
+// copy. The DB row stores the full key, so nothing ever re-derives it.
+
+function uploadToken(): string {
+  return randomBytes(6).toString("hex");
+}
 
 export function songAudioKey(songId: string, ext: string): string {
-  return `songs/${songId}/original${ext}`;
+  return `songs/${songId}/original-${uploadToken()}${ext}`;
 }
 
 export function songCoverArtKey(songId: string, ext: string): string {
-  return `songs/${songId}/cover${ext}`;
+  return `songs/${songId}/cover-${uploadToken()}${ext}`;
 }
 
 export function jingleAudioKey(jingleId: string, ext: string): string {
-  return `jingles/${jingleId}/original${ext}`;
+  return `jingles/${jingleId}/original-${uploadToken()}${ext}`;
 }
 
 export function adAudioKey(adId: string, ext: string): string {
-  return `ads/${adId}/original${ext}`;
+  return `ads/${adId}/original-${uploadToken()}${ext}`;
 }
 
 export function voiceTrackAudioKey(voiceTrackId: string, ext: string): string {
-  return `voiceTracks/${voiceTrackId}/original${ext}`;
+  return `voiceTracks/${voiceTrackId}/original-${uploadToken()}${ext}`;
 }
 
 /** Singleton, unlike the per-item keys above -- there's only ever one station logo. */
 export function stationLogoKey(ext: string): string {
-  return `station/logo${ext}`;
+  return `station/logo-${uploadToken()}${ext}`;
 }
 
 const MIME_EXTENSIONS: Record<string, string> = {

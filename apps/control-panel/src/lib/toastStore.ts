@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { newId } from "./id";
 
 export type ToastType = "success" | "error";
 
@@ -29,7 +30,7 @@ export const useToastStore = create<ToastState>((set) => ({
  * fire a toast too, and hooks can't be called from those.
  */
 export function showToast(type: ToastType, message: string): void {
-  const id = crypto.randomUUID();
+  const id = newId();
   useToastStore.setState((state) => ({ toasts: [...state.toasts, { id, type, message }] }));
   setTimeout(() => useToastStore.getState().dismiss(id), AUTO_DISMISS_MS[type]);
 }

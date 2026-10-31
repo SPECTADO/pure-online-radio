@@ -19,6 +19,12 @@ import { TransitionSource } from "../sources/transitionSource.js";
 const SAFETY_MARGIN_MS = 5000;
 /** Retry delay after a transient failure fetching the next directive (distinct from SilenceDirective.retryAfterMs, which is the API's own "queue is genuinely empty" pacing). */
 const FETCH_FAILURE_RETRY_MS = 5000;
+/** Ceiling for the exponential backoff after consecutive failed decodes (see QueueSource's "ended"). */
+const MAX_DECODE_FAILURE_BACKOFF_MS = 60_000;
+
+/** "auto" = boot / a source's natural end / a silence-retry or backstop timer; "mixout" = a song's
+ * own proactive crossfade trigger at its mixOutPointMs (it's still audible -- see runAdvance). */
+type AdvanceReason = AdvanceCommand["reason"] | "auto" | "mixout";
 
 type SongDirective = TrackDirectiveDTO & {
   mixInPointMs: number;
@@ -74,6 +80,19 @@ export class QueueController {
   private advanceTimer: NodeJS.Timeout | null = null;
   private mode: PlaybackMode = "LIVE";
   private lastNowPlaying: NowPlayingStatus | null = null;
+  /** Every advance runs strictly one after another on this chain. runAdvance reads its "outgoing"
+   * state before awaiting the fetch, so two concurrent runs (double-clicked Skip, a skip racing a
+   * scheduled AT_TIME advance or the mix-out timer) would each claim an item against the same
+   * stale state -- one claimed item never heard, its ffmpeg/transition leaked. */
+  private advanceChain: Promise<void> = Promise.resolve();
+  /** A relay owns the mixer's primary slot (RelayController) -- nothing here may touch it. */
+  private suspendedForRelay = false;
+  /** Already claimed server-side (GET /internal/playback/next has a dequeue side effect) but not
+   * mounted yet: a relay took over mid-fetch, or a mix-out trigger fetched an item that can't
+   * crossfade, so the current song plays out first. Mounted by the next advance instead of
+   * fetching again -- never dropped, or the item would be lost while recorded as played. */
+  private deferredDirective: TrackDirectiveDTO | null = null;
+  private consecutiveDecodeFailures = 0;
 
   constructor(
     private readonly mixer: Mixer,
@@ -84,7 +103,7 @@ export class QueueController {
 
   /** Kicks off the first advance at boot. */
   start(): void {
-    void this.beginCrossfade("auto");
+    void this.beginCrossfade("auto", null);
   }
 
   async handleAdvance(command: AdvanceCommand): Promise<void> {
@@ -104,16 +123,18 @@ export class QueueController {
    * that immediately after.
    */
   suspendForRelay(): void {
+    this.suspendedForRelay = true;
     this.teardownActivePlayback();
   }
 
   /**
    * Called by RelayController once the relay has ended/stopped/failed --
    * resumes normal queue-driven playback from wherever it left off, same as
-   * any other "auto" advance.
+   * any other "auto" advance (mounting a directive deferred mid-relay first).
    */
   resumeAfterRelay(): void {
-    void this.beginCrossfade("auto");
+    this.suspendedForRelay = false;
+    void this.beginCrossfade("auto", null);
   }
 
   async handleSetMode(command: SetModeCommand): Promise<void> {
@@ -123,8 +144,8 @@ export class QueueController {
 
     // Switching into AUTO while sitting on manual-mode silence resumes
     // playback immediately rather than waiting for an explicit skip.
-    if (previousMode === "MANUAL" && this.mode === "LIVE" && !this.activeSource) {
-      void this.beginCrossfade("auto");
+    if (previousMode === "MANUAL" && this.mode === "LIVE" && !this.activeSource && !this.suspendedForRelay) {
+      void this.beginCrossfade("auto", null);
       return;
     }
 
@@ -144,47 +165,98 @@ export class QueueController {
    * special-cased into a hard cut: it just calls this early (before the
    * scheduled trigger would have), so it crossfades exactly like a natural
    * transition instead of clicking straight to the next track.
+   *
+   * Serialized on `advanceChain`. Internal triggers pass `expectedActive` --
+   * the active source when they fired -- and are dropped as stale if another
+   * advance has replaced it by the time they run (e.g. an outgoing song's
+   * "ended" queued behind the very crossfade that replaced it). Explicit
+   * commands pass nothing and always run: two Skip clicks are two skips.
    */
-  private async beginCrossfade(reason: AdvanceCommand["reason"] | "auto"): Promise<void> {
+  private beginCrossfade(reason: AdvanceReason, expectedActive?: QueueSource | null): Promise<void> {
+    this.advanceChain = this.advanceChain
+      .then(() => {
+        if (expectedActive !== undefined && expectedActive !== this.activeSource) {
+          this.logger.debug({ reason }, "stale advance trigger -- playback already moved on");
+          return;
+        }
+        return this.runAdvance(reason);
+      })
+      .catch((err: unknown) => {
+        this.logger.error({ err, reason }, "queue advance failed");
+      });
+    return this.advanceChain;
+  }
+
+  private async runAdvance(reason: AdvanceReason): Promise<void> {
+    if (this.suspendedForRelay) {
+      this.logger.info({ reason }, "advance ignored while a relay owns the primary slot");
+      return;
+    }
     this.clearAdvanceTimer();
 
     const outgoingDirective = this.activeDirective;
     const previousTrackId = outgoingDirective?.mediaId ?? null;
-
-    // If a transition is already blending, its own blend becomes the
-    // "outgoing" side below instead of being torn down -- a second skip (or
-    // an unlucky auto-trigger race) mid-fade keeps fading out of whatever's
-    // actually audible right now rather than cutting it off hard. destroy()
-    // on the eventual replacement transition cascades into this one, so
-    // nothing here leaks the ffmpeg processes underneath.
-    let outgoingSource: Source | null = this.activeSource;
-    if (this.pendingTransition) {
-      clearTimeout(this.pendingTransition.completeTimer);
-      outgoingSource = this.pendingTransition.transitionSource;
-      this.pendingTransition = null;
-    }
+    // Only a song's mix-out trigger fires while it's still audible with its tail
+    // left to play; that's what decides whether a non-crossfade can wait.
+    const outgoingStillPlaying =
+      reason === "mixout" && this.activeSource !== null && outgoingDirective !== null && isSongDirective(outgoingDirective);
+    const outgoingRemainingMs = outgoingStillPlaying
+      ? Math.max(0, outgoingDirective.durationMs - outgoingDirective.mixOutPointMs)
+      : 0;
 
     // MANUAL mode: only an explicit AdvanceCommand (skip) moves playback
-    // forward. An "auto" trigger (track ended, boot, silence retry, a
-    // song's own crossfade-trigger) just holds silence until the user clicks
-    // Skip -- and mustn't call fetchNextDirective, which has the side effect
-    // of dequeuing the head of the queue, since nothing is going to play it.
-    if (reason === "auto" && this.mode === "MANUAL") {
-      this.hardCutToSilence(outgoingSource);
+    // forward. An "auto" trigger (track ended, boot, silence retry) just holds
+    // silence until the user clicks Skip -- and mustn't call
+    // fetchNextDirective, which has the side effect of dequeuing the head of
+    // the queue, since nothing is going to play it. A song's mix-out trigger
+    // lets it play to its real end first (its own "ended" then lands here).
+    if ((reason === "auto" || reason === "mixout") && this.mode === "MANUAL") {
+      if (outgoingStillPlaying) {
+        this.scheduleAdvance(outgoingRemainingMs + SAFETY_MARGIN_MS, "auto");
+        return;
+      }
+      this.hardCutToSilence(this.takeOutgoingSource());
       return;
     }
 
-    const directive = await this.apiClient.fetchNextDirective();
+    const deferred = this.deferredDirective;
+    this.deferredDirective = null;
+    const directive = deferred ?? (await this.apiClient.fetchNextDirective());
+
+    if (this.suspendedForRelay) {
+      // A relay took the primary slot while the fetch was in flight -- the
+      // item is already claimed, so keep it for resumeAfterRelay.
+      if (directive?.type === "track") this.deferredDirective = directive;
+      return;
+    }
+
+    const crossfadable =
+      directive?.type === "track" &&
+      outgoingDirective !== null &&
+      isSongDirective(outgoingDirective) &&
+      isSongDirective(directive) &&
+      (this.activeSource !== null || this.pendingTransition !== null);
+
+    if (outgoingStillPlaying && !crossfadable) {
+      // Song -> jingle/ad/voice track/silence: no crossfade, and a hard cut
+      // here would chop the song's last mix-out window. Let it play out; its
+      // "ended" (or this backstop, for a hung decode) mounts what was fetched.
+      if (directive?.type === "track") this.deferredDirective = directive;
+      this.scheduleAdvance(outgoingRemainingMs + SAFETY_MARGIN_MS, "auto");
+      return;
+    }
+
+    const outgoingSource = this.takeOutgoingSource();
 
     if (!directive) {
       this.hardCutToSilence(outgoingSource);
-      this.scheduleAdvance(FETCH_FAILURE_RETRY_MS);
+      this.scheduleAdvance(FETCH_FAILURE_RETRY_MS, "auto");
       return;
     }
 
     if (directive.type === "silence") {
       this.hardCutToSilence(outgoingSource);
-      this.scheduleAdvance(directive.retryAfterMs);
+      this.scheduleAdvance(directive.retryAfterMs, "auto");
       return;
     }
 
@@ -193,7 +265,7 @@ export class QueueController {
       // silence with a short retry rather than pretending relay playback exists.
       this.logger.warn({ directive }, "external_relay directive received but relay playback isn't implemented; treating as silence");
       this.hardCutToSilence(outgoingSource);
-      this.scheduleAdvance(FETCH_FAILURE_RETRY_MS);
+      this.scheduleAdvance(FETCH_FAILURE_RETRY_MS, "auto");
       return;
     }
 
@@ -212,12 +284,30 @@ export class QueueController {
     this.activateTrack(source, directive, previousTrackId, reason);
   }
 
+  /** What's actually audible on the primary slot right now, detached from the
+   * bookkeeping: an in-flight blend (whose destroy() cascades into both
+   * sides) or else the plain active source. The caller destroys or re-wraps it. */
+  private takeOutgoingSource(): Source | null {
+    // If a transition is already blending, its own blend becomes the
+    // "outgoing" side instead of being torn down -- a second skip mid-fade
+    // keeps fading out of whatever's actually audible right now rather than
+    // cutting it off hard. destroy() on the eventual replacement transition
+    // cascades into this one, so nothing leaks the ffmpeg processes underneath.
+    if (this.pendingTransition) {
+      clearTimeout(this.pendingTransition.completeTimer);
+      const { transitionSource } = this.pendingTransition;
+      this.pendingTransition = null;
+      return transitionSource;
+    }
+    return this.activeSource;
+  }
+
   private beginTrackCrossfade(
     outgoingSource: Source,
     outgoingDirective: SongDirective,
     incomingDirective: SongDirective,
     previousTrackId: string | null,
-    reason: AdvanceCommand["reason"] | "auto",
+    reason: AdvanceReason,
   ): void {
     const incomingSource = new QueueSource(incomingDirective, this.logger, incomingDirective.mixInPointMs);
     const transitionSource = new TransitionSource(
@@ -261,14 +351,39 @@ export class QueueController {
     source: QueueSource,
     directive: TrackDirectiveDTO,
     previousTrackId: string | null,
-    reason: AdvanceCommand["reason"] | "auto",
+    reason: AdvanceReason,
   ): void {
     this.activeSource = source;
     this.activeDirective = directive;
-    source.once("ended", () => {
-      if (this.activeSource === source) void this.beginCrossfade("auto");
+    source.once("audio", () => {
+      this.consecutiveDecodeFailures = 0;
+    });
+    source.once("ended", (failed: boolean) => {
+      if (this.activeSource !== source) return;
+      if (!failed) {
+        void this.beginCrossfade("auto", source);
+        return;
+      }
+      // Decode never worked (storage down, 403/404 URL, corrupt file). Advancing
+      // straight away would claim -- and record as played -- the whole queue in
+      // seconds, so back off exponentially instead (through the same backstop
+      // timer, so a skip still overrides it).
+      this.consecutiveDecodeFailures++;
+      const backoffMs = Math.min(
+        FETCH_FAILURE_RETRY_MS * 2 ** (this.consecutiveDecodeFailures - 1),
+        MAX_DECODE_FAILURE_BACKOFF_MS,
+      );
+      this.logger.warn(
+        { mediaId: directive.mediaId, consecutiveFailures: this.consecutiveDecodeFailures, backoffMs },
+        "queue item failed to decode -- backing off before the next advance",
+      );
+      this.scheduleAdvance(backoffMs, "auto");
     });
 
+    // Songs start at mixInPointMs and hand over at mixOutPointMs, so that's their
+    // real time on air -- consumers compute "ends at" as startedAt + durationMs
+    // (dashboard countdown, the api's ASAP external-stream dueSoon check).
+    const onAirMs = isSongDirective(directive) ? directive.mixOutPointMs - directive.mixInPointMs : 0;
     const ts = new Date().toISOString();
     this.publishStatus({
       ts,
@@ -280,14 +395,14 @@ export class QueueController {
       album: null,
       coverArtUrl: directive.coverArtUrl,
       startedAt: ts,
-      durationMs: directive.durationMs,
+      durationMs: onAirMs > 0 ? onAirMs : directive.durationMs,
       mode: this.mode,
     });
     this.statusPublisher.publishQueueAdvanced({
       ts,
       previousTrackId,
       currentTrackId: directive.mediaId,
-      reason,
+      reason: reason === "mixout" ? "auto" : reason,
     });
 
     if (isSongDirective(directive)) {
@@ -296,13 +411,14 @@ export class QueueController {
       // setTimeout, not dependent on ffmpeg emitting anything -- this
       // replaces the old fixed SAFETY_MARGIN_MS timer for songs entirely,
       // since it's already immune to the hung-decode case that timer guarded
-      // against.
-      this.scheduleAdvance(Math.max(0, directive.mixOutPointMs - directive.mixInPointMs));
+      // against. If what comes next can't crossfade, runAdvance lets the song
+      // play out instead of cutting its tail.
+      this.scheduleAdvance(Math.max(0, directive.mixOutPointMs - directive.mixInPointMs), "mixout");
     } else {
       // Non-song primary items (jingle/ad) are unchanged: driven by their
       // own "ended" event above, with this fixed margin only as a
       // hung-decode backstop.
-      this.scheduleAdvance(directive.durationMs + SAFETY_MARGIN_MS);
+      this.scheduleAdvance(directive.durationMs + SAFETY_MARGIN_MS, "auto");
     }
   }
 
@@ -347,9 +463,10 @@ export class QueueController {
     this.activeDirective = null;
   }
 
-  private scheduleAdvance(delayMs: number): void {
+  private scheduleAdvance(delayMs: number, reason: "auto" | "mixout"): void {
     this.clearAdvanceTimer();
-    this.advanceTimer = setTimeout(() => void this.beginCrossfade("auto"), delayMs);
+    const expectedActive = this.activeSource;
+    this.advanceTimer = setTimeout(() => void this.beginCrossfade(reason, expectedActive), delayMs);
   }
 
   private clearAdvanceTimer(): void {

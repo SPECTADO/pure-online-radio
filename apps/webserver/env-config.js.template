@@ -1,4 +1,6 @@
+// Same-origin on purpose: Caddy serves both SPAs and proxies /api on one origin, so a relative
+// base works from any hostname the site is reached by (domain, LAN IP, 127.0.0.1...). An absolute
+// PUBLIC_BASE_URL-based URL here broke every API call whenever the page origin differed from it.
 window.__APP_CONFIG__ = {
-  apiBaseUrl: "${PUBLIC_BASE_URL}/api",
-  natsWsUrl: "${PUBLIC_BASE_URL}/realtime".replace(/^http/, "ws")
+  apiBaseUrl: "/api"
 };

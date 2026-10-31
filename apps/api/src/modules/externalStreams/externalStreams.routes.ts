@@ -2,7 +2,7 @@ import { Router } from "express";
 import { type ExternalStream, prisma } from "@spectado/database";
 import { CreateExternalStreamRequestSchema, ExternalStreamSchema, type ExternalStreamDTO } from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
-import { triggerFromPrisma, triggerToPrismaData } from "../../lib/scheduleTrigger.js";
+import { triggerBookkeepingOnEdit, triggerFromPrisma, triggerToPrismaData } from "../../lib/scheduleTrigger.js";
 import { publishRelayStopCommand } from "../../nats/publishers.js";
 
 export const externalStreamsRoutes = Router();
@@ -69,9 +69,10 @@ externalStreamsRoutes.patch("/:id", async (req, res) => {
     res.status(404).json({ error: "external stream not found" });
     return;
   }
-  // PLAYING/FAILED/CANCELLED are all "already live or done" -- only a not-yet-started
-  // (SCHEDULED) or between-occurrences (STOPPED, recurring) stream can still be edited.
-  if (existing.status !== "SCHEDULED" && existing.status !== "STOPPED") {
+  // PLAYING/CANCELLED are "already live or done" -- only a not-yet-started (SCHEDULED),
+  // between-occurrences (STOPPED, recurring) or FAILED stream can still be edited. Editing a
+  // FAILED one (e.g. to fix its URL / pick a new runAt) re-arms it as SCHEDULED.
+  if (existing.status !== "SCHEDULED" && existing.status !== "STOPPED" && existing.status !== "FAILED") {
     res.status(400).json({ error: `cannot edit a stream with status ${existing.status}` });
     return;
   }
@@ -93,6 +94,8 @@ externalStreamsRoutes.patch("/:id", async (req, res) => {
       endAt: endAt ? new Date(endAt) : null,
       durationMs: durationMs ?? null,
       ...triggerToPrismaData(trigger),
+      ...triggerBookkeepingOnEdit(existing, trigger),
+      ...(existing.status === "FAILED" ? { status: "SCHEDULED" as const } : {}),
     },
   });
 

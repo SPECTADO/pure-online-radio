@@ -18,7 +18,9 @@ const EnvSchema = z.object({
   S3_BUCKET: z.string().min(1, "S3_BUCKET is required"),
   S3_ACCESS_KEY_ID: z.string().min(1, "S3_ACCESS_KEY_ID is required"),
   S3_SECRET_ACCESS_KEY: z.string().min(1, "S3_SECRET_ACCESS_KEY is required"),
-  S3_FORCE_PATH_STYLE: z.coerce.boolean().default(true),
+  // Not z.coerce.boolean(): that's Boolean(string), so "false" would mean true. Empty (what
+  // compose passes for an unset `${S3_FORCE_PATH_STYLE}`) falls back to the default.
+  S3_FORCE_PATH_STYLE: z.preprocess((v) => (v === "" ? undefined : v), z.stringbool().default(true)),
 
   // MusicBrainz's API etiquette asks for a descriptive User-Agent identifying
   // the application (and ideally a contact URL) -- see
@@ -43,6 +45,10 @@ const EnvSchema = z.object({
   ENCODER_CALLBACK_TOKEN: z.string().min(1, "ENCODER_CALLBACK_TOKEN is required"),
 
   PUBLIC_BASE_URL: z.string().default("http://localhost"),
+
+  // Overrides the auth cookies' Secure flag, which otherwise follows PUBLIC_BASE_URL's scheme
+  // (see `cookieSecure` below). Empty = unset.
+  COOKIE_SECURE: z.preprocess((v) => (v === "" ? undefined : v), z.stringbool().optional()),
 });
 
 function loadEnv() {
@@ -63,6 +69,10 @@ export const config = {
   isProduction: env.NODE_ENV === "production",
   port: env.PORT,
   publicBaseUrl: env.PUBLIC_BASE_URL,
+  // Whether the site is actually served over TLS, not NODE_ENV: a Secure cookie over plain HTTP
+  // (a LAN deploy) isn't stored at all by some browsers, and an HTTPS deploy left on
+  // NODE_ENV=development must still get Secure cookies.
+  cookieSecure: env.COOKIE_SECURE ?? env.PUBLIC_BASE_URL.startsWith("https://"),
 
   database: {
     url: env.DATABASE_URL,

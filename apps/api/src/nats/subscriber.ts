@@ -1,6 +1,7 @@
 import { prisma } from "@spectado/database";
 import {
   HeartbeatStatusSchema,
+  LiveEndedStatusSchema,
   NATS_SUBJECTS,
   NATS_WILDCARDS,
   NowPlayingStatusSchema,
@@ -9,6 +10,7 @@ import {
 import { logger } from "../logger.js";
 import { setNowPlaying } from "../modules/nowPlaying/nowPlayingCache.js";
 import { setLatestHeartbeat } from "../modules/status/heartbeatCache.js";
+import { clearLiveMicSession, reconcileLiveMicWithHeartbeat } from "../modules/liveMic/liveMicSessionState.js";
 import { subscribeRaw } from "./client.js";
 
 /**
@@ -20,9 +22,10 @@ import { subscribeRaw } from "./client.js";
  * that durable history log is what separation-rule lookups and reporting
  * will query. Not implemented yet; Redis is currently the only now-playing
  * source of truth. heartbeat is kept in an in-memory cache (see
- * modules/status/heartbeatCache.ts) for the system status page; the
- * remaining status subjects (jingle/live started|ended, error, commandAck)
- * are only logged for now.
+ * modules/status/heartbeatCache.ts) for the system status page and also
+ * reconciles the live-mic session guard; liveEnded clears that guard too. The
+ * remaining status subjects (jingle started|ended, live started, error,
+ * commandAck) are only logged for now.
  */
 export function startEncoderStatusSubscriber(): void {
   subscribeRaw(NATS_WILDCARDS.encoderStatus, async (subject, data) => {
@@ -43,6 +46,7 @@ export function startEncoderStatusSubscriber(): void {
         return;
       }
       setLatestHeartbeat(parsed.data);
+      reconcileLiveMicWithHeartbeat(parsed.data.activeSlots.mic);
       return;
     }
 
@@ -55,10 +59,34 @@ export function startEncoderStatusSubscriber(): void {
         logger.warn({ subject, issues: parsed.error.issues }, "[nats] invalid relayEnded status payload");
         return;
       }
+      // A failed connect is terminal only for a ONE_TIME stream -- a recurring one goes back to
+      // STOPPED so its next occurrence still fires (one bad upstream week must not kill a weekly
+      // relay for good; FAILED is never re-evaluated by the scheduler).
+      const stream = await prisma.externalStream.findUnique({
+        where: { id: parsed.data.relayId },
+        select: { triggerType: true },
+      });
+      const failedTerminally = parsed.data.reason === "failed" && stream?.triggerType === "ONE_TIME";
+      if (parsed.data.reason === "failed") {
+        logger.warn({ relayId: parsed.data.relayId, failedTerminally }, "[nats] external stream relay failed");
+      }
       await prisma.externalStream.updateMany({
         where: { id: parsed.data.relayId, status: "PLAYING" },
-        data: { status: parsed.data.reason === "failed" ? "FAILED" : "STOPPED" },
+        data: { status: failedTerminally ? "FAILED" : "STOPPED" },
       });
+      return;
+    }
+
+    // The encoder ends a live-mic session on its own whenever the browser's socket drops (or
+    // never connects) -- the api's one-broadcast-at-a-time guard has to follow, or every later
+    // "go on air" 409s. See modules/liveMic/liveMicSessionState.ts.
+    if (subject === NATS_SUBJECTS.encoderStatus.liveEnded) {
+      const parsed = LiveEndedStatusSchema.safeParse(data);
+      if (!parsed.success) {
+        logger.warn({ subject, issues: parsed.error.issues }, "[nats] invalid liveEnded status payload");
+        return;
+      }
+      clearLiveMicSession(parsed.data.sessionId, "encoder reported live mic ended");
       return;
     }
 

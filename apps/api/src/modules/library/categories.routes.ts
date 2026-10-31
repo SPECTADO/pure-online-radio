@@ -81,6 +81,19 @@ categoriesRoutes.delete("/:id", async (req, res) => {
     return;
   }
 
+  // ClockWheelStep.categoryId is ON DELETE SET NULL and null means "all categories" -- deleting a
+  // category a step filters on would silently widen that step to any song/jingle on air.
+  const step = await prisma.clockWheelStep.findFirst({
+    where: { categoryId: category.id },
+    select: { clockWheel: { select: { name: true } } },
+  });
+  if (step) {
+    res.status(409).json({
+      error: `category "${category.name}" is still used by clock wheel "${step.clockWheel.name}" -- change that step first`,
+    });
+    return;
+  }
+
   await prisma.category.delete({ where: { id: category.id } });
   res.status(204).send();
 });

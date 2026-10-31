@@ -1,5 +1,5 @@
 /**
- * Runtime configuration. In production, nginx's container entrypoint writes
+ * Runtime configuration. In production, the webserver (Caddy) container's entrypoint writes
  * `/env-config.js` (loaded by index.html before this bundle) which sets
  * `window.__APP_CONFIG__` before any app code runs. During plain `vite dev`
  * (no docker, no env-config.js) that global is absent — fall back to a
@@ -8,7 +8,7 @@
 
 export interface AppConfig {
   /** Base URL for API calls. Same-origin relative path works both behind
-   * nginx (`/api/*` proxied) and in `vite dev` (proxied via server.proxy). */
+   * Caddy (`/api/*` proxied) and in `vite dev` (proxied via server.proxy). */
   apiBaseUrl: string;
 }
 

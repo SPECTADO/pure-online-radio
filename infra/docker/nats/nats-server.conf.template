@@ -7,8 +7,9 @@
 # the moment a real generated secret happens to start with a digit (its own
 # parser then tries to read it as a number and chokes on the trailing letters).
 # Pre-resolving with envsubst sidesteps both: nats-server only ever sees a
-# complete, already-quoted string literal, regardless of what characters the
-# password contains.
+# complete, already-quoted string literal. docker-entrypoint.sh escapes `\` and
+# `"` in each password first, so those characters can't end the string early
+# (or be read as an escape) either.
 listen: 0.0.0.0:4222
 http: 0.0.0.0:8222
 
@@ -23,6 +24,11 @@ authorization {
     {
       user: "api"
       password: "${API_NATS_PASSWORD}"
+      # Compose-network clients only: the websocket listener (9222) is exposed
+      # publicly via Caddy's /realtime/, and without this the privileged users
+      # (api may publish radio.encoder.cmd.>, e.g. relay.start with any URL)
+      # could log in through it too.
+      allowed_connection_types: ["STANDARD"]
       permissions: {
         publish: ["radio.encoder.cmd.>", "radio.control.>"]
         subscribe: ["radio.encoder.status.>"]
@@ -31,6 +37,7 @@ authorization {
     {
       user: "encoder"
       password: "${ENCODER_NATS_PASSWORD}"
+      allowed_connection_types: ["STANDARD"]
       permissions: {
         publish: ["radio.encoder.status.>"]
         subscribe: ["radio.encoder.cmd.>"]
@@ -39,6 +46,8 @@ authorization {
     {
       user: "control-panel"
       password: "${CONTROL_PANEL_NATS_PASSWORD}"
+      # Browsers only ever connect over the websocket listener.
+      allowed_connection_types: ["WEBSOCKET"]
       permissions: {
         subscribe: ["radio.encoder.status.>", "radio.control.>"]
         publish: { deny: ">" }

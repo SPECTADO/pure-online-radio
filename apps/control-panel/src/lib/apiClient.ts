@@ -43,7 +43,11 @@ const REFRESH_EXEMPT_PATHS = new Set(["/auth/login", "/auth/refresh"]);
 // call instead of a stampede of them.
 let refreshPromise: Promise<boolean> | null = null;
 
-function refreshAccessToken(): Promise<boolean> {
+/** Also used outside `request()`: by the upload XHR (its own 401 retry) and by AppShell's
+ * proactive refresh timer -- `<img>`/`<audio>`/download links pointed at apiUrl() (cover art,
+ * previews, the waveform fetch) can't run a 401-refresh-retry of their own, so the access
+ * cookie must simply never be allowed to lapse while the app is open. */
+export function refreshAccessToken(): Promise<boolean> {
   if (!refreshPromise) {
     refreshPromise = fetch(apiUrl("/auth/refresh"), { method: "POST", credentials: "include" })
       .then((res) => res.ok)
@@ -53,6 +57,16 @@ function refreshAccessToken(): Promise<boolean> {
       });
   }
   return refreshPromise;
+}
+
+// Registered by authStore (a callback, not an import, to avoid an apiClient <-> authStore cycle):
+// called when a 401 survives the refresh attempt, i.e. the session is really gone (refresh token
+// expired, JWT_SECRET rotated, user deactivated) -- so the app drops to /login instead of showing
+// "Couldn't load…" on every page with no way out.
+let onSessionExpired: (() => void) | null = null;
+
+export function setOnSessionExpired(handler: () => void): void {
+  onSessionExpired = handler;
 }
 
 async function request<T>(path: string, init?: RequestInit, isRetry = false): Promise<T> {
@@ -84,6 +98,9 @@ async function request<T>(path: string, init?: RequestInit, isRetry = false): Pr
     if (refreshed) {
       return request<T>(path, init, true);
     }
+  }
+  if (res.status === 401 && !REFRESH_EXEMPT_PATHS.has(path)) {
+    onSessionExpired?.();
   }
 
   const contentType = res.headers.get("content-type") ?? "";

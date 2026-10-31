@@ -49,8 +49,22 @@ async function fireScheduleRule(rule: RuleWithItems, now: Date): Promise<void> {
     return;
   }
 
+  // A ScheduleRuleItem whose media was deleted (FK is ON DELETE SET NULL) would materialize as a
+  // media-less queue row -- skip it rather than queueing a poison item on every firing.
+  const items = rule.items.filter((item) => item.songId ?? item.jingleId ?? item.adId ?? item.voiceTrackId);
+  if (items.length < rule.items.length) {
+    logger.warn(
+      { ruleId: rule.id, skipped: rule.items.length - items.length },
+      "schedule rule has items with no media attached (deleted?) -- skipping them",
+    );
+  }
+  if (items.length === 0) {
+    await advanceRuleWithoutFiring(rule, now);
+    return;
+  }
+
   await prisma.$transaction(async (tx) => {
-    for (const [index, item] of rule.items.entries()) {
+    for (const [index, item] of items.entries()) {
       await tx.scheduledItem.create({
         data: {
           scheduledFor: now,
@@ -77,7 +91,7 @@ async function fireScheduleRule(rule: RuleWithItems, now: Date): Promise<void> {
     });
   });
 
-  logger.info({ ruleId: rule.id, itemCount: rule.items.length }, "schedule rule fired");
+  logger.info({ ruleId: rule.id, itemCount: items.length }, "schedule rule fired");
 
   if (rule.insertionMode === "AT_TIME") {
     await publishAdvanceCommand({ requestedBy: null, reason: "scheduled", userId: null });

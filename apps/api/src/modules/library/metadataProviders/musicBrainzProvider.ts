@@ -101,17 +101,59 @@ export async function searchSongMetadata(
   );
 }
 
+const MAX_COVER_ART_BYTES = 10 * 1024 * 1024; // same cap as a manually uploaded cover (middleware/upload.ts)
+const MAX_COVER_ART_REDIRECTS = 5;
+const COVER_ART_FETCH_TIMEOUT_MS = 15_000;
+
+/** The apply-metadata request echoes back whatever `coverArtUrl` the client sends, and the
+ * fetched bytes become readable cover art -- so only ever fetch from where findCoverArtUrl's
+ * results actually live (CAA redirects to archive.org), over https. Anything else would be a
+ * full-read SSRF into the compose network (nats:8222, minio, ...). */
+function isAllowedCoverArtUrl(url: URL): boolean {
+  if (url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  return host === "coverartarchive.org" || host === "archive.org" || host.endsWith(".archive.org");
+}
+
 export async function fetchCoverArtImage(
-  url: string,
+  rawUrl: string,
 ): Promise<{ data: Buffer; mimeType: string } | null> {
   try {
-    const res = await fetch(url, { headers: { "User-Agent": config.musicBrainzUserAgent } });
-    if (!res.ok) return null;
-    const mimeType = res.headers.get("content-type") ?? "image/jpeg";
-    const data = Buffer.from(await res.arrayBuffer());
-    return { data, mimeType };
+    const signal = AbortSignal.timeout(COVER_ART_FETCH_TIMEOUT_MS);
+    let url = new URL(rawUrl);
+    let res: Response | null = null;
+    // Redirects followed by hand so every hop is re-checked against the allowlist.
+    for (let hop = 0; hop <= MAX_COVER_ART_REDIRECTS; hop++) {
+      if (!isAllowedCoverArtUrl(url)) {
+        logger.warn({ url: url.toString() }, "refusing to fetch cover art from a non-allowlisted URL");
+        return null;
+      }
+      res = await fetch(url, {
+        headers: { "User-Agent": config.musicBrainzUserAgent },
+        redirect: "manual",
+        signal,
+      });
+      const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+      if (!location) break;
+      url = new URL(location, url);
+      res = null;
+    }
+    if (!res?.ok || !res.body) return null;
+
+    const mimeType = res.headers.get("content-type") ?? "";
+    if (!mimeType.startsWith("image/")) return null;
+    if (Number(res.headers.get("content-length") ?? 0) > MAX_COVER_ART_BYTES) return null;
+
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for await (const chunk of res.body) {
+      total += chunk.byteLength;
+      if (total > MAX_COVER_ART_BYTES) return null;
+      chunks.push(chunk);
+    }
+    return { data: Buffer.concat(chunks), mimeType };
   } catch (err) {
-    logger.warn({ err, url }, "failed to fetch cover art image");
+    logger.warn({ err, url: rawUrl }, "failed to fetch cover art image");
     return null;
   }
 }

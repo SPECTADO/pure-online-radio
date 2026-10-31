@@ -11,6 +11,7 @@ import {
 } from "@spectado/shared-types";
 import { requireAuth, requireRole } from "../../middleware/auth.js";
 import { findActiveMedia } from "../../lib/media.js";
+import { logger } from "../../logger.js";
 import { UPCOMING_TRIGGER_WINDOW_MS } from "../../scheduler/constants.js";
 import { computeNextOccurrence } from "../../scheduler/triggerEngine.js";
 import {
@@ -56,6 +57,21 @@ export function toQueueEntryDTO(item: QueueEntryWithIncludes): QueueEntryDTO {
   };
 }
 
+/** List variant: a row whose media was deleted out from under it (the FK is ON DELETE SET NULL)
+ * is omitted with a warning rather than 500ing the whole list -- same approach as
+ * toScheduleRuleDTO. claimNextQueueItem cancels such rows when they reach the queue head. */
+export function toQueueEntryDTOs(items: QueueEntryWithIncludes[]): QueueEntryDTO[] {
+  const dtos: QueueEntryDTO[] = [];
+  for (const item of items) {
+    if (!(item.song ?? item.jingle ?? item.ad ?? item.voiceTrack)) {
+      logger.warn({ scheduledItemId: item.id }, "queue item has no media attached (deleted?) -- omitting from response");
+      continue;
+    }
+    dtos.push(QueueEntrySchema.parse(toQueueEntryDTO(item)));
+  }
+  return dtos;
+}
+
 // Due (scheduledFor <= now, materialized by a ScheduleRule firing) items always outrank the
 // manual queue (scheduledFor: null), which outranks clock-wheel fills (clockWheelStepId set) --
 // same 3-tier priority order as internal/playback/next's claimNextQueueItem -- so a manager sees
@@ -83,7 +99,7 @@ queueRoutes.get("/", async (_req, res) => {
   ]);
 
   const items = [...due, ...manual, ...wheel];
-  res.json(items.map((item) => QueueEntrySchema.parse(toQueueEntryDTO(item))));
+  res.json(toQueueEntryDTOs(items));
 });
 
 const UPCOMING_TRIGGER_TYPES: ScheduleTriggerType[] = ["ONE_TIME", "WEEKLY", "INTERVAL"];

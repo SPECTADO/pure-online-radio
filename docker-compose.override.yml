@@ -80,6 +80,9 @@ services:
       # container, localhost is the container itself, not api -- reach it via
       # the `edge` network's Docker DNS instead (api joins both data and edge).
       - VITE_DEV_API_PROXY_TARGET=http://api:3000
+      # Same reasoning, for the live-mic websocket proxy (vite.config.ts) -- the encoder
+      # joins the edge network too.
+      - VITE_DEV_LIVE_MIC_PROXY_TARGET=http://encoder:8080
     volumes:
       - "./apps/control-panel:/app/apps/control-panel"
       - "./packages:/app/packages"

@@ -55,5 +55,14 @@ export const CreateExternalStreamRequestSchema = ScheduleTriggerSchema.extend({
 }).superRefine((data, ctx) => {
   refineScheduleTrigger(data, ctx);
   refineEndBehavior(data, ctx);
+  // Play-count firing is only implemented for ScheduleRule (scheduleRuleScheduler's
+  // incrementSongPlayCountAndFire) -- an external stream with this trigger would never start.
+  if (data.triggerType === "PLAY_COUNT") {
+    ctx.addIssue({
+      code: "custom",
+      message: "PLAY_COUNT triggers are not supported for external streams",
+      path: ["triggerType"],
+    });
+  }
 });
 export type CreateExternalStreamRequestDTO = z.infer<typeof CreateExternalStreamRequestSchema>;

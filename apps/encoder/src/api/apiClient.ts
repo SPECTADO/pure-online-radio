@@ -18,6 +18,13 @@ export const DEFAULT_STREAM_SETTINGS: StreamSettingsDTO = {
   updatedAt: new Date(0).toISOString(),
 };
 
+/** playback/next commits its claim (item marked PLAYED + history row) *before* building the
+ * response, so a client-side abort after that point silently loses the item -- the retry claims
+ * the one after it. Give this call far more headroom than the generic API_TIMEOUT_MS; an api
+ * that's actually down still fails fast (connection refused), not via this timeout. Stopgap:
+ * the real fix is a client-supplied requestId the api dedupes on. */
+const PLAYBACK_NEXT_MIN_TIMEOUT_MS = 15_000;
+
 /**
  * REAL: fetches `${API_CALLBACK_URL}/playback/next` on demand.
  *
@@ -42,7 +49,10 @@ export class ApiClient {
   async fetchNextDirective(): Promise<PlaybackDirectiveDTO | null> {
     const url = `${this.config.apiCallbackUrl}/playback/next`;
     const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => controller.abort(), this.config.apiTimeoutMs);
+    const timeoutHandle = setTimeout(
+      () => controller.abort(),
+      Math.max(this.config.apiTimeoutMs, PLAYBACK_NEXT_MIN_TIMEOUT_MS),
+    );
 
     try {
       const res = await fetch(url, {

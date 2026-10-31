@@ -82,7 +82,7 @@ export function ExternalStreamModal({ stream, onClose }: { stream?: ExternalStre
           </label>
         </div>
 
-        <ScheduleTriggerFields value={trigger} onChange={setTrigger} />
+        <ScheduleTriggerFields value={trigger} onChange={setTrigger} allowPlayCount={false} />
 
         <div className="rounded-md border border-slate-200 p-3">
           <span className={labelClass}>When it stops</span>

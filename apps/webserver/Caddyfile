@@ -72,6 +72,19 @@ http://127.0.0.1:9991 {
 		file_server
 	}
 
+	# --- Encoder-only API routes: never public ---
+	# The encoder calls the api's /internal/* directly over the compose network
+	# (API_CALLBACK_URL=http://api:3000/internal), so nothing legitimate needs
+	# them through here -- without this block `/api/*` below would expose them
+	# to the internet guarded only by the static ENCODER_CALLBACK_TOKEN (and
+	# GET /internal/playback/next has a real dequeue side effect). A single
+	# inline path matcher (not a named one) on purpose: Caddy sorts same-named
+	# directives with path matchers longest-first, so this always wins over
+	# `/api/*` regardless of where it sits in the file.
+	handle /api/internal* {
+		respond 404
+	}
+
 	# --- API reverse proxy ---
 	handle /api/* {
 		encode gzip
